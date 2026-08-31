@@ -1,0 +1,114 @@
+"""Pond Protocol v1.0 manifest.
+
+Two details taken from the full protocol spec rather than the quickstart,
+because the two pages disagree:
+
+  * `limits` requires THREE fields - max_request_bytes, max_attachment_bytes
+    and max_run_seconds. The quickstart example omits max_attachment_bytes,
+    so copying it verbatim produces a manifest that fails schema validation
+    at publish time.
+
+  * max_run_seconds has no upper bound in the schema (minimum: 1). The
+    quickstart shows 60, the full spec's own example shows 300. You choose the
+    ceiling and must then honour it: Pond validates each request's deadline_ms
+    against max_run_seconds * 1000.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+PROTOCOL_VERSION = "1.0"
+
+
+def build_manifest(config) -> dict[str, Any]:
+    pond = config.get("pond", {}) or {}
+    return {
+        "protocol": "marketplace-agent",
+        "protocol_version": PROTOCOL_VERSION,
+        "agent_version": "1.0.0",
+        "metadata": {
+            "name": "YC Launch Monitor",
+            "short_description": (
+                "Alerts on new YC and SPEEDRUN companies, including founders "
+                "who announce before the official directory lists them."
+            ),
+            "description": (
+                "Monitors the YC company directory, the a16z SPEEDRUN "
+                "portfolio, X and LinkedIn. Detects founders announcing an "
+                "acceptance before it is officially listed, verifies each "
+                "claim against YC's own API, and pushes a Slack alert. "
+                "Maintains state so a company is never alerted twice."
+            ),
+            "category": "research",
+            "key_features": (
+                "Early detection ahead of official announcement; verification "
+                "against the official directory; per-source polling cadence; "
+                "duplicate-proof state; Slack delivery."
+            ),
+            "use_cases": (
+                "Sales and GTM teams who want to reach new-batch founders "
+                "before the rest of the market sees the announcement."
+            ),
+        },
+        "actions": [
+            {
+                "id": "scan_now",
+                "name": "Scan for new companies",
+                "description": (
+                    "Run a full monitoring pass across all sources and alert "
+                    "on anything new. Use for any request to check, scan, or "
+                    "look for new YC or SPEEDRUN companies."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "Optional focus for this scan.",
+                        }
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "id": "query_state",
+                "name": "Ask about findings",
+                "description": (
+                    "Answer questions about what has already been found - "
+                    "recent alerts, lead times, source health. Fast, no scan."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "The question to answer.",
+                            "minLength": 1,
+                        }
+                    },
+                    "required": ["prompt"],
+                    "additionalProperties": False,
+                },
+            },
+        ],
+        "capabilities": {
+            "sync": True,
+            "streaming": False,
+            # A full scan will not finish inside a short deadline, so it is
+            # accepted as a task and polled. Note these flags are only hints -
+            # Pond accepts a valid 200 or 202 per request regardless.
+            "async_tasks": True,
+            "cancellation": False,
+            "attachments": False,
+            "feedback": False,
+        },
+        "input_modes": ["text/plain"],
+        "output_modes": ["text/markdown"],
+        "limits": {
+            "max_request_bytes": int(pond.get("max_request_bytes", 1_048_576)),
+            "max_attachment_bytes": int(pond.get("max_attachment_bytes", 1_048_576)),
+            "max_run_seconds": int(pond.get("max_run_seconds", 300)),
+        },
+    }

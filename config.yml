@@ -1,0 +1,72 @@
+# YC Launch Monitor - runtime configuration.
+# Everything here is hot-editable; nothing in this file requires a code change.
+
+agent:
+  model: claude-opus-5
+  max_tokens: 16000
+  # Hard ceiling on tool-calling turns per cycle. Stops a runaway loop from
+  # spending the client's Anthropic budget on a bad day.
+  max_iterations: 40
+  # Below this, a claim is logged for review instead of alerted. Raise it if
+  # false positives appear; lower it once the client trusts the feed.
+  confidence_threshold: 0.75
+
+# Poll intervals are per source, not global. The free sources can run at
+# minute-level freshness; the metered one cannot. See README "Cadence".
+sources:
+  yc_directory:
+    enabled: true
+    interval_seconds: 60
+    # Batches to watch. Mid-fill batches are where early detection pays off.
+    batches: ["Fall 2026", "Winter 2027", "Spring 2026", "Summer 2026"]
+
+  yc_speedrun:
+    enabled: true
+    interval_seconds: 300
+    portfolio_url: "https://speedrun.a16z.com/"
+
+  x:
+    enabled: true
+    interval_seconds: 180
+    # Tier 1: free profile timelines, no account needed. Staggered across ticks.
+    watchlist:
+      - ycombinator
+      - paulg
+      - garrytan
+      - sdianahu
+      - snowmaker
+      - jaredfriedman
+    # Tier 3: keyword search. Off unless APIFY_TOKEN is set and X_KEYWORD_TIER=apify.
+    keyword_interval_seconds: 1800
+    keywords:
+      - "got into YC"
+      - "accepted into Y Combinator"
+      - "joining Y Combinator"
+      - "backed by Y Combinator"
+      - "a16z speedrun"
+      - "joining SPEEDRUN"
+    apify_actor: "apidojo/tweet-scraper"
+
+  linkedin:
+    enabled: true
+    # Metered. 6h keeps the bill near $22/mo; every minute would be ~$360/day.
+    interval_seconds: 21600
+    apify_actor: "apimaestro/linkedin-posts-search-scraper-no-cookies"
+    apify_actor_fallback: "harvestapi/linkedin-post-search"
+    max_items_per_run: 50
+    keywords:
+      - "got into YC"
+      - "Y Combinator"
+      - "a16z SPEEDRUN"
+
+slack:
+  # Matches the alert cards in the task brief.
+  early_header: ":zap: EARLY YC SIGNAL - Founder Announced Before YC"
+  confirmed_header: ":white_check_mark: NEW YC COMPANY"
+
+pond:
+  # You declare this ceiling yourself; the schema sets no upper bound.
+  # Pond validates each request's deadline_ms against it.
+  max_run_seconds: 300
+  max_request_bytes: 1048576
+  max_attachment_bytes: 1048576
