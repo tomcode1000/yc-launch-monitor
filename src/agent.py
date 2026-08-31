@@ -479,18 +479,35 @@ class MonitorAgent:
             source = self.sources.get(name)
             if not source or not source.enabled:
                 continue
-            for sig in source.collect(since):
+            collected = source.collect(since)
+            self._book_spend(source)
+            for sig in collected:
                 fields = source.to_alert_fields(sig.raw)
                 key = normalize_company(fields["company"] or "")
-                if not key or not self.store.claim_alert_slot(
+                if not key:
+                    continue
+
+                # Silent path: record the listing as verification baseline
+                # WITHOUT claiming an alert slot. claim_alert_slot stamps
+                # alerted_at, which is how the rest of the system counts
+                # alerts actually sent - using it here would report hundreds
+                # of alerts that were deliberately never delivered.
+                if seeding or not announce:
+                    if self.store.seen_signal(sig.source, sig.external_id):
+                        continue
+                    self.store.note_company(
+                        key, fields["company"], fields["program"],
+                        fields["batch"])
+                    self.store.record_signal(sig, company_key=key)
+                    seeded += 1
+                    continue
+
+                if not self.store.claim_alert_slot(
                     key, fields["company"], fields["program"], fields["batch"],
                     name, AlertStatus.CONFIRMED.value, fields.get("website"),
                 ):
                     continue
                 self.store.record_signal(sig, company_key=key)
-                if seeding or not announce:
-                    seeded += 1
-                    continue
                 self.notifier.send(
                     company=fields["company"], status="confirmed",
                     program=fields["program"], batch=fields["batch"],
