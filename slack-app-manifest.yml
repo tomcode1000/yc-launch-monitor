@@ -1,0 +1,45 @@
+# Slack app manifest for YC Launch Monitor.
+#
+# Use this instead of clicking through the scope settings by hand:
+#   1. https://api.slack.com/apps  ->  Create New App  ->  From a manifest
+#   2. Pick your workspace, paste this file, Create
+#   3. Install to Workspace  ->  Allow
+#   4. OAuth & Permissions  ->  copy the Bot User OAuth Token (starts xoxb-)
+#
+# That token is what goes in SLACK_BOT_TOKEN. Slack calls it a token, not an
+# API key - there is no separate key to generate.
+
+display_information:
+  name: YC Launch Monitor
+  description: Early alerts for new YC and SPEEDRUN companies
+  background_color: "#1a1d21"
+  long_description: >-
+    Watches the Y Combinator company directory, the a16z SPEEDRUN portfolio, X
+    and LinkedIn, and posts an alert when a founder announces a batch
+    acceptance - including before the official directory lists them. Each alert
+    carries the founder, the batch, the original post link, and whether the
+    company has been verified against YC's own API yet.
+
+features:
+  bot_user:
+    display_name: YC Monitor
+    always_online: false
+
+oauth_config:
+  scopes:
+    bot:
+      # Post messages. This is the only scope the bot actually needs.
+      - chat:write
+      # Lets the bot post to any PUBLIC channel without being invited first.
+      # Without this you must run /invite @YC Monitor in the target channel or
+      # delivery fails with not_in_channel. Drop this scope if you would rather
+      # invite the bot explicitly.
+      - chat:write.public
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+  # The bot only sends; it never receives. No event subscriptions, no slash
+  # commands, no interactivity - so there is no public URL for Slack to call
+  # and nothing to configure here.

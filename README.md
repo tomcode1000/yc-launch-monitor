@@ -41,7 +41,18 @@ curl localhost:8000/health
 
 **One secret and one setting get you running:** `SLACK_BOT_TOKEN`, and `SLACK_CHANNEL` (a destination, not a secret). No AI API key, no paid accounts — the YC and SPEEDRUN sources are free, so you get real alerts on the first run.
 
-After creating the Slack app, remember to invite the bot to the channel (`/invite @YC Monitor`), or `chat:write` fails with `not_in_channel`.
+### Getting the Slack token
+
+Slack calls it a **token**, not an API key — there is no separate key to generate.
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From a manifest**
+2. Pick your workspace, paste [`slack-app-manifest.yml`](slack-app-manifest.yml), and create
+3. **Install to Workspace** → **Allow**
+4. **OAuth & Permissions** → copy the **Bot User OAuth Token** (starts `xoxb-`)
+
+That token is `SLACK_BOT_TOKEN`. The manifest requests `chat:write.public`, so the bot can post to any public channel without being invited. If you remove that scope, or you are posting to a **private** channel, run `/invite @YC Monitor` in the target channel first — otherwise delivery fails with `not_in_channel`.
+
+For `SLACK_CHANNEL` use `#yc-alerts`, a channel ID (`C08AB12CD`, from **Copy link** on the channel), or your own member ID (`U…`, from your profile menu → **Copy member ID**) to receive alerts as a DM.
 
 ### Deploying
 
