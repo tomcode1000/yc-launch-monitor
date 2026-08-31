@@ -1,0 +1,3 @@
+# Optional extra. Install only when running with LLM_MODE=auto or always.
+-r requirements.txt
+anthropic>=0.116.0

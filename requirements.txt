@@ -1,8 +1,11 @@
-anthropic>=0.116.0
+# Core runtime. This is everything the bot needs to run rules-only, which is
+# the default mode - no LLM, no API key.
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 httpx>=0.27.0
 pydantic>=2.7.0
 PyYAML>=6.0
-apscheduler>=3.10.4
 slack-sdk>=3.27.0
+
+# Optional: only needed for LLM_MODE=auto or always.
+#   pip install -r requirements-llm.txt

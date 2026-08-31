@@ -19,8 +19,18 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-import anthropic
-from anthropic import beta_tool
+# The Anthropic SDK is optional. This bot ships rules-only by default, so a
+# deployment with no API key should not even need the package installed. The
+# import is guarded rather than assumed - a missing optional dependency must
+# not stop the server from booting.
+try:
+    import anthropic
+    from anthropic import beta_tool
+except ImportError:  # pragma: no cover - exercised by the no-SDK deployment
+    anthropic = None
+
+    def beta_tool(fn):  # type: ignore[misc]
+        return fn
 
 from . import classify_rules
 from .models import AlertStatus, lead_key, normalize_batch, normalize_company
@@ -71,15 +81,36 @@ class MonitorAgent:
         self.store = store
         self.sources = sources
         self.notifier = notifier
-        self.client = anthropic.Anthropic() if config.anthropic_key else None
         agent_cfg = config.get("agent", {}) or {}
         self.model = agent_cfg.get("model", "claude-opus-5")
         self.max_tokens = int(agent_cfg.get("max_tokens", 16000))
         self.max_iterations = int(agent_cfg.get("max_iterations", 40))
         self.threshold = float(agent_cfg.get("confidence_threshold", 0.75))
-        # auto = rules first, model only for surviving social signals.
-        # off = no model at all. always = model every cycle.
-        self.llm_mode = os.environ.get("LLM_MODE", "auto").lower()
+        # Rules-only by default. The bot ships without an Anthropic dependency;
+        # set LLM_MODE=auto to add model judgment on top (see README).
+        #   off    - no model at all, no key, no SDK required
+        #   auto   - rules first, model only on surviving social signals
+        #   always - model every cycle
+        self.llm_mode = os.environ.get("LLM_MODE", "off").lower()
+
+        self.client = None
+        if self.llm_mode != "off":
+            if anthropic is None:
+                log.warning(
+                    "LLM_MODE=%s but the anthropic package is not installed. "
+                    "Falling back to rules-only. Install with: pip install anthropic",
+                    self.llm_mode,
+                )
+                self.llm_mode = "off"
+            elif not config.anthropic_key:
+                log.warning(
+                    "LLM_MODE=%s but ANTHROPIC_API_KEY is unset. "
+                    "Falling back to rules-only.", self.llm_mode,
+                )
+                self.llm_mode = "off"
+            else:
+                self.client = anthropic.Anthropic()
+
         self._pending: list = []
 
     # ------------------------------------------------------------------

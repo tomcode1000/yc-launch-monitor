@@ -4,6 +4,8 @@ A Slack bot that alerts you to new Y Combinator and SPEEDRUN companies — inclu
 
 Built as a Pond Protocol agent, so it runs autonomously *and* answers on demand.
 
+**Runs with no LLM and no AI API key.** Classification is a deterministic rules engine; model judgment is an optional add-on.
+
 ---
 
 ## What it does
@@ -37,9 +39,7 @@ curl -X POST localhost:8000/admin/scan
 curl localhost:8000/health
 ```
 
-**Two secrets and one setting get you running:** `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, and `SLACK_CHANNEL` (which is just a destination, not a secret). The YC and SPEEDRUN sources need no paid accounts, so you get real alerts on the first run.
-
-Want zero API cost? Set `LLM_MODE=off` and skip the Anthropic key entirely — see [Running without an LLM](#running-without-an-llm).
+**One secret and one setting get you running:** `SLACK_BOT_TOKEN`, and `SLACK_CHANNEL` (a destination, not a secret). No AI API key, no paid accounts — the YC and SPEEDRUN sources are free, so you get real alerts on the first run.
 
 After creating the Slack app, remember to invite the bot to the channel (`/invite @YC Monitor`), or `chat:write` fails with `not_in_channel`.
 
@@ -80,42 +80,51 @@ Behaviour lives in `config.yml` (no code changes needed); secrets live in the en
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | unless `LLM_MODE=off` | Powers the agent's judgment |
 | `SLACK_BOT_TOKEN` | yes | Bot token with `chat:write` |
 | `SLACK_CHANNEL` | yes | Channel name, channel ID, or a user ID for a DM |
 | `POND_ACCESS_KEY` | on publish | Authenticates Pond's calls |
-| `LLM_MODE` | optional | `auto` (default), `off`, or `always` — see below |
+| `LLM_MODE` | optional | `off` (default), `auto`, or `always` — see below |
+| `ANTHROPIC_API_KEY` | only if `LLM_MODE` is not `off` | Optional model judgment |
 | `APIFY_TOKEN` | optional | Enables LinkedIn and the X keyword tier |
 | `X_KEYWORD_TIER` | optional | `off` (default) or `apify` |
 | `DAILY_SPEND_CAP_USD` | optional | Halts metered sources when hit (default `2.00`) |
 
 ---
 
-## Running without an LLM
+## How classification works (no LLM required)
 
-The model is not on the critical path for most of what this bot does, and `LLM_MODE` controls how much it is used.
+This bot ships **rules-only by default**. There is no AI API key to obtain, no per-cycle cost, and the `anthropic` package is not even installed by `requirements.txt`. Everything runs on `src/classify_rules.py`.
 
-| Mode | Behaviour | Cost |
-|---|---|---|
-| `auto` *(default)* | Rules handle everything they can. The model is called **only** when a social signal survives the free prefilter — typically a few times a day, not every cycle. | Low |
-| `off` | No model, no Anthropic key needed. Pure rules. | Zero |
-| `always` | Model runs every cycle. | High |
+### What the rules do well
 
-**Why `auto` is the default.** A directory poll runs every 60 seconds, but a company appearing in YC's own API needs no interpretation — so that path never calls a model. Without this gate, a 60s poll would fire a full tool-calling loop every minute.
+Rejecting is the hard-working half, and patterns handle it cleanly — these are the dominant false positives:
 
-**What you lose at `off`.** Rules are good at *rejecting* and weaker at *extracting*. Deciding that "our YC interview is next week" is not an acceptance is pattern matching, and `classify_rules.py` handles it well. Naming the company is harder — but that matters less than it first appears, because **the company name is metadata, not the lead**:
-
-| Post | Result |
+| Post | Verdict |
 |---|---|
-| `We got into YC F26! building https://acme.ai` | ✅ `early` — name from the linked domain, checked against the directory |
+| `We got into YC F26! building https://acme.ai` | ✅ `early` — name from the linked domain, checked against YC's API |
 | `We got into YC F26!! so hyped` | ✅ `early_unverified` — still a lead, keyed on the founder's handle |
-| `Our YC interview is next week` | ✅ Correctly dropped, for free |
+| `Our YC interview is next week` | ❌ Dropped — interview, not acceptance |
+| `Just applied to YC W27` | ❌ Dropped — application |
+| `We got rejected from YC` | ❌ Dropped — rejection post-mortem |
+| `Back in 2019 when we did YC` | ❌ Dropped — alumni |
+| `Congrats to @foo on getting into YC!` | ❌ Dropped — third-party, not the founder |
 
-You act on these by messaging the founder through the post link, so a post that names no company is still a complete lead. What you lose at `off` is mostly *enrichment* — company name, website, and the directory check — not the leads themselves.
+### Why a missing company name doesn't cost you a lead
 
-The one real gap: with no company name there is nothing to look up, so the alert says `early_unverified` and states plainly that no directory check was made. It never claims a verification that did not happen.
+You act on these alerts by **messaging the founder through their post link**. The company name is enrichment, not the lead. So a post that names no company still produces a complete, actionable alert keyed on the author's handle — it just carries `early_unverified` status, because with no company name there is nothing to look up in YC's directory. The card says exactly that rather than claiming a check that never happened.
 
-Everything else — the confirmed-alert path, dedupe, verification, Slack, Pond, scheduling — is fully deterministic and identical in every mode.
+### Optional: adding model judgment
+
+If you later want an LLM to handle the ambiguous middle — unusual phrasing, company names buried in prose — it is two steps and no code change:
+
+```bash
+pip install -r requirements-llm.txt
+# then set in .env:
+#   LLM_MODE=auto
+#   ANTHROPIC_API_KEY=sk-ant-...
+```
+
+`auto` keeps the rules engine in front: the model is called **only** on social signals that survive the free prefilter, never on directory arrivals, which need no interpretation. If the package or key is missing the bot logs a warning and falls back to rules-only rather than failing.
 
 ---
 

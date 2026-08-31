@@ -2,7 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Core deps only. The bot runs rules-only by default, so the Anthropic SDK is
+# deliberately not installed. To enable LLM_MODE=auto, swap in requirements-llm.txt.
+COPY requirements.txt requirements-llm.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/

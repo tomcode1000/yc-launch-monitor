@@ -38,7 +38,8 @@ def build_manifest(config) -> dict[str, Any]:
                 "portfolio, X and LinkedIn. Detects founders announcing an "
                 "acceptance before it is officially listed, verifies each "
                 "claim against YC's own API, and pushes a Slack alert. "
-                "Maintains state so a company is never alerted twice."
+                "Maintains state so a lead is never alerted twice. Runs on a "
+                "deterministic rules engine - no LLM required."
             ),
             "category": "research",
             "key_features": (
