@@ -188,6 +188,22 @@ class Store:
             out.append((c - a).total_seconds() / 3600)
         return out
 
+    def alerted_lead_count(self) -> int:
+        """Leads actually delivered to Slack.
+
+        Counts social leads only. Directory listings are recorded as the
+        verification baseline and never alerted, so including them would
+        report hundreds of alerts nobody ever received - and older databases
+        still carry rows from before the baseline stopped claiming alert
+        slots, which this definition ignores by construction.
+        """
+        row = self._conn.execute(
+            """SELECT COUNT(*) AS n FROM companies
+               WHERE alerted_at IS NOT NULL
+                 AND source NOT IN ('yc_directory', 'yc_speedrun')"""
+        ).fetchone()
+        return int(row["n"]) if row else 0
+
     def recent_alerts(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """SELECT name, batch, program, alert_status, alerted_at, source,

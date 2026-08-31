@@ -123,7 +123,7 @@ def render(store, notifier, config, repo_url: str) -> str:
         median = (f'\nmedian_lead       <span class="g">{_median(leads):.0f}h</span>'
                   f' <span class="dim">ahead of official listing</span>')
 
-    alerted = len(store.recent_alerts(500))
+    alerted = store.alerted_lead_count()
     slack_cls, slack_txt = (
         ("g", "configured") if notifier.configured else ("r", "NOT CONFIGURED"))
 
