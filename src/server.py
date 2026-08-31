@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from .agent import MonitorAgent
@@ -227,6 +227,58 @@ def _answer_state_query(prompt: str) -> str:
 # ---------------------------------------------------------------------------
 # Operator endpoints (not part of Pond Protocol)
 # ---------------------------------------------------------------------------
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """A human landing page.
+
+    Every other route is machine-facing, so a person following the link from
+    the repo or from Pond would otherwise be met with a bare 404 and no way to
+    tell a running agent from a broken one.
+    """
+    rows = "".join(
+        f"<tr><td>{h['source']}</td>"
+        f"<td class='{'ok' if h['healthy'] else 'bad'}'>"
+        f"{'healthy' if h['healthy'] else 'degraded'}</td>"
+        f"<td>{h['last_run_at'] or 'not yet run'}</td></tr>"
+        for h in store.health()
+    ) or "<tr><td colspan='3'>no source has reported yet</td></tr>"
+
+    return f"""<!doctype html>
+<title>YC Launch Monitor</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font: 15px/1.6 ui-sans-serif, system-ui, sans-serif;
+         max-width: 46rem; margin: 4rem auto; padding: 0 1.5rem; }}
+  h1 {{ font-size: 1.5rem; margin-bottom: .25rem; }}
+  p.sub {{ margin-top: 0; opacity: .75; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 1.5rem 0; }}
+  th, td {{ text-align: left; padding: .5rem .75rem;
+            border-bottom: 1px solid rgba(128,128,128,.3); }}
+  th {{ font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
+        opacity: .7; }}
+  code {{ background: rgba(128,128,128,.15); padding: .15em .4em;
+          border-radius: 4px; }}
+  .ok {{ color: #1a7f37; }} .bad {{ color: #b35900; }}
+</style>
+<h1>YC Launch Monitor</h1>
+<p class="sub">Alerts on new Y Combinator and a16z SPEEDRUN companies &mdash;
+including founders who announce before the official directory lists them.</p>
+
+<table>
+  <tr><th>Source</th><th>State</th><th>Last run</th></tr>
+  {rows}
+</table>
+
+<p>Slack delivery: <strong>{'configured' if notifier.configured else 'not configured'}</strong>
+ &middot; Spend today: <strong>${store.spend_today():.2f}</strong></p>
+
+<p>Machine endpoints:
+ <a href="/health"><code>/health</code></a> &middot;
+ <a href="/manifest"><code>/manifest</code></a> &middot;
+ <code>POST /runs</code> (Pond, authenticated)</p>
+</html>"""
+
 
 @app.get("/health")
 def health() -> dict[str, Any]:
