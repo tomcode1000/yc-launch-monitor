@@ -26,7 +26,7 @@ The `Status` line on every alert is a verified fact, not a guess: before sending
 ```bash
 git clone <your-repo-url> && cd yc-launch-monitor
 pip install -r requirements.txt
-cp .env.example .env          # fill in the three required values
+cp .env.example .env          # fill in your keys
 uvicorn src.server:app --host 0.0.0.0 --port 8000
 ```
 
@@ -37,9 +37,11 @@ curl -X POST localhost:8000/admin/scan
 curl localhost:8000/health
 ```
 
-**It works with only three variables** — `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_CHANNEL`. The YC and SPEEDRUN sources need no paid accounts, so you get real alerts on the first run.
+**Two secrets and one setting get you running:** `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, and `SLACK_CHANNEL` (which is just a destination, not a secret). The YC and SPEEDRUN sources need no paid accounts, so you get real alerts on the first run.
 
-Without an `ANTHROPIC_API_KEY` it still runs a deterministic directory-only pass, so you can see the pipeline work before spending anything.
+Want zero API cost? Set `LLM_MODE=off` and skip the Anthropic key entirely — see [Running without an LLM](#running-without-an-llm).
+
+After creating the Slack app, remember to invite the bot to the channel (`/invite @YC Monitor`), or `chat:write` fails with `not_in_channel`.
 
 ### Deploying
 
@@ -78,13 +80,40 @@ Behaviour lives in `config.yml` (no code changes needed); secrets live in the en
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | yes | Powers the agent's judgment |
+| `ANTHROPIC_API_KEY` | unless `LLM_MODE=off` | Powers the agent's judgment |
 | `SLACK_BOT_TOKEN` | yes | Bot token with `chat:write` |
 | `SLACK_CHANNEL` | yes | Channel name, channel ID, or a user ID for a DM |
 | `POND_ACCESS_KEY` | on publish | Authenticates Pond's calls |
+| `LLM_MODE` | optional | `auto` (default), `off`, or `always` — see below |
 | `APIFY_TOKEN` | optional | Enables LinkedIn and the X keyword tier |
 | `X_KEYWORD_TIER` | optional | `off` (default) or `apify` |
 | `DAILY_SPEND_CAP_USD` | optional | Halts metered sources when hit (default `2.00`) |
+
+---
+
+## Running without an LLM
+
+The model is not on the critical path for most of what this bot does, and `LLM_MODE` controls how much it is used.
+
+| Mode | Behaviour | Cost |
+|---|---|---|
+| `auto` *(default)* | Rules handle everything they can. The model is called **only** when a social signal survives the free prefilter — typically a few times a day, not every cycle. | Low |
+| `off` | No model, no Anthropic key needed. Pure rules. | Zero |
+| `always` | Model runs every cycle. | High |
+
+**Why `auto` is the default.** A directory poll runs every 60 seconds, but a company appearing in YC's own API needs no interpretation — so that path never calls a model. Without this gate, a 60s poll would fire a full tool-calling loop every minute.
+
+**What you lose at `off`.** Rules are good at *rejecting* and weak at *extracting*. Deciding that "our YC interview is next week" is not an acceptance is pattern matching, and `classify_rules.py` handles it. But naming the company is not:
+
+| Post | Rules result |
+|---|---|
+| `We got into YC F26! building https://acme.ai` | ✅ Alerts — name from the linked domain |
+| `Our YC interview is next week` | ✅ Correctly dropped, for free |
+| `We got into YC F26!! so hyped` | ⚠️ **Skipped** — no recoverable company name |
+
+That third row is the cost of `off`: roughly a third to a half of early detections are lost. The rules engine **declines rather than guessing**, deliberately — a wrong name here becomes a cold email to a company that never got in.
+
+Everything else — the confirmed-alert path, dedupe, verification, Slack, Pond, scheduling — is fully deterministic and identical in every mode.
 
 ---
 

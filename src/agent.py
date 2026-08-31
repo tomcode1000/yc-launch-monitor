@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 import anthropic
 from anthropic import beta_tool
 
-from .models import AlertStatus, Program, normalize_batch, normalize_company
+from . import classify_rules
+from .models import AlertStatus, normalize_batch, normalize_company
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +69,9 @@ class MonitorAgent:
         self.max_tokens = int(agent_cfg.get("max_tokens", 16000))
         self.max_iterations = int(agent_cfg.get("max_iterations", 40))
         self.threshold = float(agent_cfg.get("confidence_threshold", 0.75))
+        # auto = rules first, model only for surviving social signals.
+        # off = no model at all. always = model every cycle.
+        self.llm_mode = os.environ.get("LLM_MODE", "auto").lower()
         self._pending: list = []
 
     # ------------------------------------------------------------------
@@ -81,20 +86,13 @@ class MonitorAgent:
 
         @beta_tool
         def collect_signals() -> str:
-            """Gather new candidate posts and directory entries from every source.
+            """Get the candidate posts gathered for this cycle.
 
-            Returns the signals collected since the last cycle, already filtered
-            to those mentioning YC or SPEEDRUN with a plausible batch code.
+            These have already passed a cheap rules prefilter that removed
+            interview announcements, applications, rejection post-mortems and
+            alumni posts, so what remains is worth reading carefully.
             """
-            since = datetime.now(timezone.utc) - timedelta(days=3)
-            collected = []
-            for source in sources.values():
-                if not source.enabled or not source.due():
-                    continue
-                for sig in source.collect(since):
-                    if source.name in ("yc_directory", "yc_speedrun") or sig.looks_relevant():
-                        collected.append(sig)
-            agent._pending = collected
+            collected = agent._pending
             payload = [
                 {
                     "source": s.source,
@@ -254,10 +252,103 @@ class MonitorAgent:
         return seeded
 
     def run_cycle(self, instruction: str | None = None) -> str:
-        """One monitoring pass. Returns the agent's own summary."""
-        if self.client is None:
-            return self._run_without_model()
+        """One monitoring pass, routed by how much judgment it actually needs.
 
+        Directory arrivals are unambiguous - a company appearing in YC's own
+        API needs no interpretation - so they always take the deterministic
+        path and cost nothing. The model is invoked only when social signals
+        survive the free rules prefilter, which on most cycles is nothing.
+
+        That gate is what stops a 60-second directory poll from firing an Opus
+        tool loop every minute.
+        """
+        parts = [self.run_directory_pass()]
+
+        candidates = self.gather_social_candidates()
+        if not candidates:
+            parts.append("No social candidates; no model call made.")
+            return " ".join(parts)
+
+        if self.llm_mode == "off" or self.client is None:
+            parts.append(self.run_rules_pass(candidates))
+            return " ".join(parts)
+
+        parts.append(self._run_model_pass(candidates, instruction))
+        return " ".join(parts)
+
+    def gather_social_candidates(self) -> list:
+        """Collect X/LinkedIn signals that survive the free rules prefilter."""
+        since = datetime.now(timezone.utc) - timedelta(days=3)
+        out = []
+        for name in ("x", "linkedin"):
+            source = self.sources.get(name)
+            if not source or not source.enabled or not source.due():
+                continue
+            for sig in source.collect(since):
+                if self.store.seen_signal(sig.source, sig.external_id):
+                    continue
+                if not sig.looks_relevant():
+                    continue
+                if not classify_rules.is_candidate(sig.text):
+                    # Rejected for free: interview announcements, applications,
+                    # rejection post-mortems, alumni reminiscing.
+                    self.store.record_signal(sig, claim_type="filtered")
+                    continue
+                out.append(sig)
+        return out
+
+    def run_rules_pass(self, candidates: list) -> str:
+        """Rules-only handling. No model, no API cost.
+
+        Used when LLM_MODE=off or no key is configured. Weaker than the model
+        at naming companies, and it declines rather than guessing: a signal it
+        cannot name is logged for review, never alerted. A wrong name here
+        would become a cold email to a company that never got in.
+        """
+        alerted = skipped = 0
+        for sig in candidates:
+            claim, confidence = classify_rules.classify(sig.text)
+            company = classify_rules.extract_company(sig.text)
+            if not company or confidence < self.threshold:
+                self.store.record_signal(
+                    sig, claim_type=claim.value, confidence=confidence)
+                skipped += 1
+                continue
+
+            key = normalize_company(company)
+            if self._listed(company):
+                self.store.record_signal(sig, company_key=key, claim_type=claim.value)
+                skipped += 1
+                continue
+
+            batch = classify_rules.extract_batch(sig.text)
+            program = classify_rules.extract_program(sig.text)
+            if not self.store.claim_alert_slot(
+                key, company, program.value, batch, sig.source,
+                AlertStatus.EARLY.value,
+            ):
+                skipped += 1
+                continue
+
+            self.store.record_signal(
+                sig, company_key=key, claim_type=claim.value, confidence=confidence)
+            self.notifier.send(
+                company=company, status="early", program=program.value, batch=batch,
+                founder=sig.author, source="X" if sig.source == "x" else "LinkedIn",
+                url=sig.url, quote=sig.text[:280],
+            )
+            alerted += 1
+        return f"Rules pass: {alerted} alert(s), {skipped} skipped of {len(candidates)}."
+
+    def _listed(self, company: str) -> bool:
+        for name in ("yc_directory", "yc_speedrun"):
+            source = self.sources.get(name)
+            if source and source.lookup(company):
+                return True
+        return False
+
+    def _run_model_pass(self, candidates: list, instruction: str | None) -> str:
+        self._pending = candidates
         runner = self.client.beta.messages.tool_runner(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -278,12 +369,11 @@ class MonitorAgent:
                     summary = block.text
         return summary or "Cycle completed with no summary."
 
-    def _run_without_model(self) -> str:
-        """Deterministic fallback when no Anthropic key is configured.
+    def run_directory_pass(self) -> str:
+        """Deterministic handling of directory arrivals. Never calls a model.
 
-        Directory arrivals are unambiguous - a company appearing in YC's own
-        API needs no judgment - so the confirmed-alert path still works and the
-        pipeline stays demonstrable before any key is added.
+        A company appearing in YC's own API needs no interpretation, so this
+        path runs on every cycle regardless of LLM_MODE and costs nothing.
         """
         since = datetime.now(timezone.utc) - timedelta(days=3)
         sent = 0
@@ -307,4 +397,4 @@ class MonitorAgent:
                     description=fields.get("description"), url=fields.get("url"),
                 )
                 sent += 1
-        return f"No ANTHROPIC_API_KEY set - ran directory-only pass. {sent} alert(s)."
+        return f"Directory pass: {sent} confirmed alert(s)."
