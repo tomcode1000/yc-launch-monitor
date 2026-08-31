@@ -17,6 +17,11 @@ sources:
   yc_directory:
     enabled: true
     interval_seconds: 60
+    # The directory is the VERIFICATION ORACLE, not a news source. A company
+    # appearing here has already been announced by YC, so alerting on it is
+    # noise. Keep polling (social leads are checked against this to decide
+    # EARLY SIGNAL vs CONFIRMED); set true only to alert on listings directly.
+    alert_on_new_listing: false
     # Batches to watch. Mid-fill batches are where early detection pays off.
     batches: ["Fall 2026", "Winter 2027", "Spring 2026", "Summer 2026"]
 
@@ -38,6 +43,8 @@ sources:
       - jaredfriedman
     # Tier 3: keyword search. Off unless APIFY_TOKEN is set and X_KEYWORD_TIER=apify.
     keyword_interval_seconds: 1800
+    # Demo budget: ~$0.01/item, so 15 items is ~$0.15 per keyword sweep.
+    max_items_per_run: 15
     keywords:
       - "got into YC"
       - "accepted into Y Combinator"
@@ -53,7 +60,7 @@ sources:
     interval_seconds: 21600
     apify_actor: "apimaestro/linkedin-posts-search-scraper-no-cookies"
     apify_actor_fallback: "harvestapi/linkedin-post-search"
-    max_items_per_run: 50
+    max_items_per_run: 10
     keywords:
       - "got into YC"
       - "Y Combinator"

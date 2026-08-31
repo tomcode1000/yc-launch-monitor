@@ -14,6 +14,7 @@ Verified against Apify's live store API:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -27,26 +28,68 @@ class ApifyError(RuntimeError):
     pass
 
 
+TERMINAL = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
+
+
 def run_actor(
     actor: str,
     token: str | None,
     payload: dict[str, Any],
     timeout: int = 180,
+    poll_seconds: float = 3.0,
 ) -> list[dict[str, Any]]:
-    """Run an actor synchronously and return its dataset items.
+    """Start an actor, poll until it finishes, then fetch its dataset items.
 
-    Uses run-sync-get-dataset-items so one call covers start, wait, and fetch.
+    Deliberately NOT run-sync-get-dataset-items. That endpoint holds a single
+    connection open for the whole run, which TLS-inspecting antivirus and many
+    corporate proxies reset partway through (WinError 10054). Three short
+    requests survive environments where one long one does not.
     """
     if not token:
         raise ApifyError("APIFY_TOKEN is not set")
 
     slug = actor.replace("/", "~")
-    url = f"{BASE}/acts/{slug}/run-sync-get-dataset-items"
-    with httpx.Client(timeout=timeout) as client:
-        resp = client.post(url, params={"token": token}, json=payload)
-        if resp.status_code >= 400:
-            raise ApifyError(f"{actor} returned {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()
+    # Bearer header, never ?token= - httpx and most proxies log full URLs, and
+    # a token in the query string ends up in every log line and access record.
+    auth = {"Authorization": f"Bearer {token}"}
+    params: dict[str, Any] = {}
+    deadline = time.monotonic() + timeout
+
+    with httpx.Client(timeout=30, headers=auth) as client:
+        started = client.post(f"{BASE}/acts/{slug}/runs", json=payload)
+        if started.status_code >= 400:
+            raise ApifyError(
+                f"{actor} returned {started.status_code}: {started.text[:200]}")
+        run = started.json()["data"]
+        run_id, dataset_id = run["id"], run.get("defaultDatasetId")
+
+        status = run.get("status")
+        while status not in TERMINAL:
+            if time.monotonic() > deadline:
+                client.post(f"{BASE}/actor-runs/{run_id}/abort")
+                raise ApifyError(f"{actor} still {status} after {timeout}s; aborted")
+            time.sleep(poll_seconds)
+            polled = client.get(f"{BASE}/actor-runs/{run_id}")
+            if polled.status_code >= 400:
+                raise ApifyError(
+                    f"{actor} status check returned {polled.status_code}")
+            run = polled.json()["data"]
+            status = run.get("status")
+            dataset_id = run.get("defaultDatasetId", dataset_id)
+
+        if status != "SUCCEEDED":
+            raise ApifyError(f"{actor} finished as {status}")
+        if not dataset_id:
+            raise ApifyError(f"{actor} succeeded but exposed no dataset")
+
+        items = client.get(
+            f"{BASE}/datasets/{dataset_id}/items",
+            params={"clean": "true"},
+        )
+        if items.status_code >= 400:
+            raise ApifyError(f"{actor} dataset fetch returned {items.status_code}")
+        data = items.json()
+
     if not isinstance(data, list):
         raise ApifyError(f"{actor} returned {type(data).__name__}, expected a list")
     return data

@@ -7,8 +7,24 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
+
+# Use the OS certificate store rather than certifi's bundle. Machines running
+# TLS-inspecting antivirus or a corporate proxy present a private root CA that
+# certifi does not carry, which otherwise fails every outbound HTTPS call.
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:  # optional; certifi's bundle is fine without interception
+    pass
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Secrets live in .env next to config.yml. Load it before anything reads
+# os.environ; real environment variables always win over the file.
+load_dotenv(ROOT / ".env", override=False)
+
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", ROOT / "config.yml"))
 
 

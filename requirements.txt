@@ -5,6 +5,8 @@ uvicorn[standard]>=0.30.0
 httpx>=0.27.0
 pydantic>=2.7.0
 PyYAML>=6.0
+python-dotenv>=1.0.0
+truststore>=0.9.0
 slack-sdk>=3.27.0
 
 # Optional: only needed for LLM_MODE=auto or always.

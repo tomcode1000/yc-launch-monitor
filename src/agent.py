@@ -295,6 +295,11 @@ class MonitorAgent:
             source = self.sources.get(name)
             if not source or not source.enabled:
                 continue
+            # A listing here is already-public news. Record it so it can serve
+            # as the verification baseline, but stay quiet unless explicitly
+            # configured to alert - the product is the pre-announcement scoop.
+            announce = bool(self.config.source(name).get("alert_on_new_listing", False))
+
             for sig in source.collect(since):
                 fields = source.to_alert_fields(sig.raw)
                 key = normalize_company(fields.get("company") or "")
@@ -447,7 +452,15 @@ class MonitorAgent:
         path runs on every cycle regardless of LLM_MODE and costs nothing.
         """
         since = datetime.now(timezone.utc) - timedelta(days=3)
-        sent = 0
+
+        # First run against an empty store is a backfill, not news: every
+        # company YC has ever listed looks "new" to us. Record them silently so
+        # the store has a baseline, and alert only on what arrives after that.
+        seeding = self.store.company_count() == 0
+        if seeding:
+            log.info("empty store: seeding baseline, suppressing alerts this pass")
+
+        sent = seeded = 0
         for name in ("yc_directory", "yc_speedrun"):
             source = self.sources.get(name)
             if not source or not source.enabled:
@@ -461,6 +474,9 @@ class MonitorAgent:
                 ):
                     continue
                 self.store.record_signal(sig, company_key=key)
+                if seeding or not announce:
+                    seeded += 1
+                    continue
                 self.notifier.send(
                     company=fields["company"], status="confirmed",
                     program=fields["program"], batch=fields["batch"],
@@ -468,4 +484,7 @@ class MonitorAgent:
                     description=fields.get("description"), url=fields.get("url"),
                 )
                 sent += 1
-        return f"Directory pass: {sent} confirmed alert(s)."
+        if seeded and not sent:
+            return (f"Directory pass: {seeded} listing(s) recorded as "
+                    "verification baseline, no alerts sent.")
+        return f"Directory pass: {sent} confirmed alert(s), {seeded} recorded silently."
