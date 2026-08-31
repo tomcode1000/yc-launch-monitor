@@ -18,6 +18,13 @@ CONFIRMED_HEADER = ":white_check_mark: NEW YC COMPANY"
 
 EARLY_STATUS = ":zap: Founder announced / not yet officially announced by YC"
 CONFIRMED_STATUS = ":white_check_mark: Confirmed by YC"
+# No company name was recoverable from the post, so the directory could not be
+# checked. The lead is still actionable - the founder is reachable through the
+# link - but the alert must not claim a verification that never happened.
+UNVERIFIED_STATUS = (
+    ":zap: Founder announced / company not named in post, "
+    "so not checked against the YC directory"
+)
 
 
 def _format_detected(when: datetime) -> str:
@@ -43,8 +50,8 @@ def _fields(pairs: list[tuple[str, Any]]) -> list[dict]:
 
 def build_alert(
     *,
-    company: str,
-    status: str,
+    company: str | None = None,
+    status: str = "early",
     program: str = "yc",
     batch: str | None = None,
     founder: str | None = None,
@@ -55,11 +62,21 @@ def build_alert(
     detected_at: datetime | None = None,
 ) -> tuple[str, list[dict]]:
     """Return (fallback_text, blocks) for one alert."""
-    early = status == "early"
+    early = status in ("early", "early_unverified")
     header = EARLY_HEADER if early else CONFIRMED_HEADER
     if program == "speedrun":
         header = header.replace("YC", "SPEEDRUN")
 
+    if status == "early_unverified":
+        status_line = UNVERIFIED_STATUS
+    elif early:
+        status_line = EARLY_STATUS
+    else:
+        status_line = CONFIRMED_STATUS
+
+    # The client acts on the founder, not the company name. When a post does
+    # not name a company the lead is still complete - who posted, and where -
+    # so the Company row is simply omitted and Founder leads the card.
     detected = _format_detected(detected_at or datetime.now(timezone.utc))
 
     blocks: list[dict] = [
@@ -79,7 +96,7 @@ def build_alert(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*Status:* {EARLY_STATUS if early else CONFIRMED_STATUS}",
+                "text": f"*Status:* {status_line}",
             },
         },
     ]
@@ -106,7 +123,8 @@ def build_alert(
          "elements": [{"type": "mrkdwn", "text": f"Detected: {detected}"}]}
     )
 
-    fallback = f"{header} - {company}" + (f" ({batch})" if batch else "")
+    fallback = f"{header} - {company or founder or 'unknown'}" + (
+        f" ({batch})" if batch else "")
     return fallback, blocks
 
 

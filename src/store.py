@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS companies (
     alerted_at    TEXT,
     alert_status  TEXT,
     source        TEXT,
-    confirmed_at  TEXT
+    confirmed_at  TEXT,
+    founder       TEXT,
+    post_url      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS signals (
@@ -86,6 +88,13 @@ class Store:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        # Databases created before founder-first leads existed predate these
+        # columns. Add them rather than making the client wipe state.
+        for column in ("founder TEXT", "post_url TEXT"):
+            try:
+                self._conn.execute(f"ALTER TABLE companies ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
 
     # --- companies / dedupe -------------------------------------------
@@ -108,6 +117,8 @@ class Store:
         source: str,
         status: str,
         website: str | None = None,
+        founder: str | None = None,
+        post_url: str | None = None,
     ) -> bool:
         """Reserve the right to alert on a company. Returns False if taken.
 
@@ -126,13 +137,16 @@ class Store:
             self._conn.execute(
                 """INSERT INTO companies
                      (key, name, program, batch, website, first_seen_at,
-                      alerted_at, alert_status, source)
-                   VALUES (?,?,?,?,?,?,?,?,?)
+                      alerted_at, alert_status, source, founder, post_url)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(key) DO UPDATE SET
                      alerted_at=excluded.alerted_at,
                      alert_status=excluded.alert_status,
-                     batch=COALESCE(excluded.batch, companies.batch)""",
-                (key, name, program, batch, website, now, now, status, source),
+                     batch=COALESCE(excluded.batch, companies.batch),
+                     founder=COALESCE(excluded.founder, companies.founder),
+                     post_url=COALESCE(excluded.post_url, companies.post_url)""",
+                (key, name, program, batch, website, now, now, status, source,
+                 founder, post_url),
             )
             self._conn.commit()
             return True
@@ -164,7 +178,8 @@ class Store:
     def lead_times_hours(self) -> list[float]:
         rows = self._conn.execute(
             """SELECT alerted_at, confirmed_at FROM companies
-               WHERE alert_status = 'early' AND confirmed_at IS NOT NULL"""
+               WHERE alert_status IN ('early','early_unverified')
+                 AND confirmed_at IS NOT NULL"""
         ).fetchall()
         out = []
         for r in rows:
@@ -175,7 +190,8 @@ class Store:
 
     def recent_alerts(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            """SELECT name, batch, program, alert_status, alerted_at, source
+            """SELECT name, batch, program, alert_status, alerted_at, source,
+                      founder, post_url
                FROM companies WHERE alerted_at IS NOT NULL
                ORDER BY alerted_at DESC LIMIT ?""",
             (limit,),

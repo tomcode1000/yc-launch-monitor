@@ -23,7 +23,7 @@ import anthropic
 from anthropic import beta_tool
 
 from . import classify_rules
-from .models import AlertStatus, normalize_batch, normalize_company
+from .models import AlertStatus, lead_key, normalize_batch, normalize_company
 
 log = logging.getLogger(__name__)
 
@@ -42,14 +42,22 @@ next week"), applications, rejection post-mortems, and alumni reminiscing about 
 an old batch. These are the most common false positives and they matter - the \
 person reading these alerts will cold-email the founder, so a wrong alert costs \
 more than a missed one.
-3. For anything that looks like a real acceptance, call `lookup_company` to \
-check whether the directory already lists it.
-   - Not listed  -> this is the scoop. Status "early".
-   - Listed, and the signal came from the directory itself -> status "confirmed".
+3. Identify the company if you can, but understand what the lead actually is. \
+The person reading these alerts acts by MESSAGING THE FOUNDER through their \
+post link. So the founder and the link are the lead; the company name is \
+useful metadata, not a requirement. A post saying only "we got into YC F26!!" \
+is a complete and valuable lead. Never discard a genuine acceptance because no \
+company is named - pass company_name="" and the handle instead.
+4. If you have a company name, call `lookup_company` to check the directory.
+   - Not listed  -> the scoop. Status "early".
+   - Listed, and the signal came from the directory itself -> "confirmed".
    - Listed, and the signal came from social -> already public. Suppress it.
-4. Before alerting, call `check_already_alerted`. Two cofounders posting the \
-same news is one company, not two alerts.
-5. Call `record_alert` to reserve the company, then `post_slack_alert`. If \
+   With no company name there is nothing to look up, so use status \
+"early_unverified". The lead is real; just do not claim a check you did not make.
+5. Before alerting, call `check_already_alerted` with the company name if you \
+have one, otherwise the author handle. Two cofounders posting the same news is \
+one lead, not two alerts.
+6. Call `record_alert` to reserve the lead, then `post_slack_alert`. If \
 `record_alert` returns already_claimed, do not alert - another signal in this \
 same cycle got there first.
 
@@ -132,49 +140,68 @@ class MonitorAgent:
             return json.dumps({"listed": False})
 
         @beta_tool
-        def check_already_alerted(company_name: str) -> str:
-            """Check whether an alert has already been sent for this company.
+        def check_already_alerted(
+            company_name: str = "", founder_handle: str = ""
+        ) -> str:
+            """Check whether this lead has already been alerted on.
+
+            Pass whichever you have. Identity prefers the company name because
+            it collapses cofounders posting the same news into one lead; it
+            falls back to the author handle when no company is named.
 
             Args:
-                company_name: The company name as it appears in the post.
+                company_name: Company name, if the post gives one.
+                founder_handle: The author handle, e.g. @janedoe.
             """
-            key = normalize_company(company_name)
+            key = lead_key(company_name or None, founder_handle or None)
+            if not key:
+                return json.dumps({"error": "Provide company_name or founder_handle."})
             return json.dumps({"already_alerted": store.has_alerted(key), "key": key})
 
         @beta_tool
         def record_alert(
-            company_name: str,
             status: str,
+            company_name: str = "",
+            founder_handle: str = "",
+            post_url: str = "",
             program: str = "yc",
             batch: str = "",
             website: str = "",
             source: str = "",
         ) -> str:
-            """Reserve the right to alert on a company. Call before posting.
+            """Reserve the right to alert on a lead. Call before posting.
 
-            This is an atomic check-and-set. If it returns already_claimed, some
-            other signal reserved this company first and you must not alert.
+            Atomic check-and-set. If it returns already_claimed, another signal
+            reserved this lead first and you must not alert.
 
             Args:
-                company_name: Company name.
-                status: Either "early" or "confirmed".
+                status: "early", "early_unverified", or "confirmed".
+                company_name: Company name if the post names one. May be empty.
+                founder_handle: Author handle. Required when company_name is empty.
+                post_url: Link to the original post.
                 program: Either "yc" or "speedrun".
                 batch: Batch code such as F26, W27, P26, S26.
                 website: Company website if known.
                 source: Which source produced the signal.
             """
-            key = normalize_company(company_name)
+            key = lead_key(company_name or None, founder_handle or None)
+            if not key:
+                return json.dumps({
+                    "claimed": False,
+                    "reason": "Provide company_name or founder_handle.",
+                })
             ok = store.claim_alert_slot(
-                key, company_name, program, normalize_batch(batch) or None,
-                source, status, website or None,
+                key, company_name or founder_handle or "unknown", program,
+                normalize_batch(batch) or None, source, status, website or None,
+                founder=founder_handle or None, post_url=post_url or None,
             )
             return json.dumps({"claimed": ok, "key": key,
                                "reason": None if ok else "already_claimed"})
 
         @beta_tool
         def post_slack_alert(
-            company_name: str,
             status: str,
+            company_name: str = "",
             batch: str = "",
             founder: str = "",
             source: str = "",
@@ -196,14 +223,14 @@ class MonitorAgent:
                 quote: The founder's own words, for the Original post block.
                 program: Either "yc" or "speedrun".
             """
-            key = normalize_company(company_name)
-            if not store.has_alerted(key):
+            key = lead_key(company_name or None, founder or None)
+            if not key or not store.has_alerted(key):
                 return json.dumps({
                     "sent": False,
-                    "error": "No reservation for this company. Call record_alert first.",
+                    "error": "No reservation for this lead. Call record_alert first.",
                 })
             sent = notifier.send(
-                company=company_name, status=status, program=program,
+                company=company_name or None, status=status, program=program,
                 batch=normalize_batch(batch) or None, founder=founder or None,
                 source=source or None, description=description or None,
                 url=url or None, quote=quote or None,
@@ -308,24 +335,37 @@ class MonitorAgent:
         alerted = skipped = 0
         for sig in candidates:
             claim, confidence = classify_rules.classify(sig.text)
-            company = classify_rules.extract_company(sig.text)
-            if not company or confidence < self.threshold:
+            if confidence < self.threshold:
                 self.store.record_signal(
                     sig, claim_type=claim.value, confidence=confidence)
                 skipped += 1
                 continue
 
-            key = normalize_company(company)
-            if self._listed(company):
-                self.store.record_signal(sig, company_key=key, claim_type=claim.value)
+            # The company name is metadata, not the lead. What the client acts
+            # on is the founder and their post, both of which we always have.
+            company = classify_rules.extract_company(sig.text)
+            key = lead_key(company, sig.author)
+            if not key:
                 skipped += 1
                 continue
+
+            # Verification needs a name to look up. Without one, say so rather
+            # than claiming a directory check that never happened.
+            if company:
+                if self._listed(company):
+                    self.store.record_signal(
+                        sig, company_key=key, claim_type=claim.value)
+                    skipped += 1
+                    continue
+                status = AlertStatus.EARLY.value
+            else:
+                status = AlertStatus.EARLY_UNVERIFIED.value
 
             batch = classify_rules.extract_batch(sig.text)
             program = classify_rules.extract_program(sig.text)
             if not self.store.claim_alert_slot(
-                key, company, program.value, batch, sig.source,
-                AlertStatus.EARLY.value,
+                key, company or (sig.author or "unknown"), program.value, batch,
+                sig.source, status, founder=sig.author, post_url=sig.url,
             ):
                 skipped += 1
                 continue
@@ -333,7 +373,7 @@ class MonitorAgent:
             self.store.record_signal(
                 sig, company_key=key, claim_type=claim.value, confidence=confidence)
             self.notifier.send(
-                company=company, status="early", program=program.value, batch=batch,
+                company=company, status=status, program=program.value, batch=batch,
                 founder=sig.author, source="X" if sig.source == "x" else "LinkedIn",
                 url=sig.url, quote=sig.text[:280],
             )

@@ -103,15 +103,17 @@ The model is not on the critical path for most of what this bot does, and `LLM_M
 
 **Why `auto` is the default.** A directory poll runs every 60 seconds, but a company appearing in YC's own API needs no interpretation — so that path never calls a model. Without this gate, a 60s poll would fire a full tool-calling loop every minute.
 
-**What you lose at `off`.** Rules are good at *rejecting* and weak at *extracting*. Deciding that "our YC interview is next week" is not an acceptance is pattern matching, and `classify_rules.py` handles it. But naming the company is not:
+**What you lose at `off`.** Rules are good at *rejecting* and weaker at *extracting*. Deciding that "our YC interview is next week" is not an acceptance is pattern matching, and `classify_rules.py` handles it well. Naming the company is harder — but that matters less than it first appears, because **the company name is metadata, not the lead**:
 
-| Post | Rules result |
+| Post | Result |
 |---|---|
-| `We got into YC F26! building https://acme.ai` | ✅ Alerts — name from the linked domain |
+| `We got into YC F26! building https://acme.ai` | ✅ `early` — name from the linked domain, checked against the directory |
+| `We got into YC F26!! so hyped` | ✅ `early_unverified` — still a lead, keyed on the founder's handle |
 | `Our YC interview is next week` | ✅ Correctly dropped, for free |
-| `We got into YC F26!! so hyped` | ⚠️ **Skipped** — no recoverable company name |
 
-That third row is the cost of `off`: roughly a third to a half of early detections are lost. The rules engine **declines rather than guessing**, deliberately — a wrong name here becomes a cold email to a company that never got in.
+You act on these by messaging the founder through the post link, so a post that names no company is still a complete lead. What you lose at `off` is mostly *enrichment* — company name, website, and the directory check — not the leads themselves.
+
+The one real gap: with no company name there is nothing to look up, so the alert says `early_unverified` and states plainly that no directory check was made. It never claims a verification that did not happen.
 
 Everything else — the confirmed-alert path, dedupe, verification, Slack, Pond, scheduling — is fully deterministic and identical in every mode.
 

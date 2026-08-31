@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.models import (  # noqa: E402
     RawSignal,
+    lead_key,
     normalize_batch,
     normalize_company,
 )
@@ -39,6 +40,23 @@ def test_prefilter():
     assert hit.looks_relevant()
     assert not miss.looks_relevant()
     assert speedrun.looks_relevant()
+
+
+def test_a_lead_survives_without_a_company_name():
+    # The client acts by messaging the founder through the post link, so a
+    # post that names no company is still a complete lead.
+    assert lead_key(None, "@janedoe") == "handle:janedoe"
+    assert lead_key("Acme AI", "@jane") == normalize_company("Acme")
+    assert lead_key(None, None) is None
+
+
+def test_cofounders_collapse_but_strangers_do_not():
+    # Same company, different people -> one lead.
+    assert lead_key("Acme AI", "@jane") == lead_key("Acme", "@bob")
+    # No company name, different people -> two leads, correctly.
+    assert lead_key(None, "@jane") != lead_key(None, "@bob")
+    # No company name, same person posting twice -> one lead.
+    assert lead_key(None, "@jane") == lead_key(None, "@Jane")
 
 
 def test_dedupe_is_structural():

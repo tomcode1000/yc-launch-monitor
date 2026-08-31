@@ -45,7 +45,11 @@ class ClaimType(str, Enum):
 
 
 class AlertStatus(str, Enum):
-    EARLY = "early"          # founder announced, absent from the directory
+    EARLY = "early"          # founder announced, verified absent from directory
+    # Founder announced but no company name was recoverable, so the directory
+    # could not be checked. Still a good lead - the person is reachable via the
+    # post - but the alert must not claim a verification that did not happen.
+    EARLY_UNVERIFIED = "early_unverified"
     CONFIRMED = "confirmed"  # present in the directory
     SUPPRESSED = "suppressed"
     LOGGED = "logged"        # below the confidence threshold
@@ -96,6 +100,27 @@ class Claim:
         key deliberately ignores author and source.
         """
         return normalize_company(self.company_name)
+
+
+def lead_key(company: str | None, handle: str | None) -> str | None:
+    """Identity for one lead.
+
+    The client's job is to message the founder, so the lead is the *person* and
+    their post - the company name is useful metadata, not the thing being
+    contacted. A post saying only "we got into YC F26!!" is still a perfectly
+    good lead: the author is reachable through the link.
+
+    So identity falls back to the handle. Company name is preferred when known
+    because it collapses cofounders posting the same news into one lead, which
+    a handle key cannot do.
+    """
+    if company:
+        key = normalize_company(company)
+        if key:
+            return key
+    if handle:
+        return f"handle:{handle.lstrip('@').strip().lower()}"
+    return None
 
 
 def normalize_company(name: str) -> str:
