@@ -1,0 +1,46 @@
+# Fly.io deployment for the YC Launch Monitor.
+#
+# The app name must be globally unique across Fly; if `fly launch` reports it
+# is taken, change it here and in the fly.dev URL you give Pond.
+
+app = "yc-launch-monitor"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  # Must sit inside the mount below, or dedupe history dies with the machine.
+  DATABASE_PATH = "/app/data/monitor.db"
+  LOG_LEVEL = "INFO"
+
+# Dedupe, lead-time history and spend all live in this volume. Without it a
+# redeploy starts from an empty store: the directory pass re-seeds silently,
+# but recent social posts would be alerted a second time.
+[[mounts]]
+  source = "yc_monitor_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # This bot is not request-driven. It polls sources on its own schedule, so
+  # the machine has to stay up between HTTP calls - Fly's default of stopping
+  # idle machines would silently halt monitoring and only look fine when Pond
+  # happens to call it.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "60s"
+    method = "GET"
+    timeout = "10s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
