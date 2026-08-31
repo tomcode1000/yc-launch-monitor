@@ -300,7 +300,9 @@ class MonitorAgent:
             # configured to alert - the product is the pre-announcement scoop.
             announce = bool(self.config.source(name).get("alert_on_new_listing", False))
 
-            for sig in source.collect(since):
+            collected = source.collect(since)
+            self._book_spend(source)
+            for sig in collected:
                 fields = source.to_alert_fields(sig.raw)
                 key = normalize_company(fields.get("company") or "")
                 if not key:
@@ -339,6 +341,16 @@ class MonitorAgent:
         parts.append(self._run_model_pass(candidates, instruction))
         return " ".join(parts)
 
+    def _book_spend(self, source) -> None:
+        """Charge a source's run against today's budget.
+
+        Without this the governor reads a spend of zero forever and the daily
+        cap never trips, which matters only for the metered sources.
+        """
+        cost = source.estimated_cost(getattr(source, "last_item_count", 0))
+        if cost:
+            self.store.add_spend(source.name, cost)
+
     def gather_social_candidates(self) -> list:
         """Collect X/LinkedIn signals that survive the free rules prefilter."""
         since = datetime.now(timezone.utc) - timedelta(days=3)
@@ -347,7 +359,9 @@ class MonitorAgent:
             source = self.sources.get(name)
             if not source or not source.enabled or not source.due():
                 continue
-            for sig in source.collect(since):
+            collected = source.collect(since)
+            self._book_spend(source)
+            for sig in collected:
                 if self.store.seen_signal(sig.source, sig.external_id):
                     continue
                 if not sig.looks_relevant():

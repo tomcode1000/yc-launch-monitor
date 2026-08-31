@@ -59,6 +59,8 @@ class Source(ABC):
     def fetch(self, since: datetime) -> list[RawSignal]:
         """Collect signals newer than `since`. Must not raise."""
 
+    last_item_count: int = 0
+
     def collect(self, since: datetime) -> list[RawSignal]:
         """fetch() wrapped so one broken source never stops a cycle.
 
@@ -68,10 +70,14 @@ class Source(ABC):
         self._last_run = time.time()
         try:
             signals = self.fetch(since)
+            # Item count drives the cost governor; the caller reads it after
+            # collect() and books the spend against this source.
+            self.last_item_count = len(signals)
             self._health = SourceHealth(self.name, True, f"{len(signals)} signals", self._last_run)
             return signals
         except Exception as exc:  # noqa: BLE001 - deliberate: degrade, don't crash
             log.warning("source %s degraded: %s", self.name, exc)
+            self.last_item_count = 0
             self._health = SourceHealth(self.name, False, str(exc)[:200], self._last_run)
             return []
 
