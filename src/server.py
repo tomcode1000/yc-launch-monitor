@@ -251,8 +251,19 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/admin/scan")
-def admin_scan() -> dict[str, Any]:
-    """Trigger a cycle by hand. Used for the demo recording."""
+def admin_scan(x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+    """Trigger a cycle by hand. Used for the demo recording.
+
+    Guarded: the service is on a public URL, and an open trigger lets anyone
+    spend the Apify budget and post into the client's Slack channel. With no
+    ADMIN_TOKEN configured the route does not exist at all, so a deployment
+    that forgets to set one is closed rather than open.
+    """
+    expected = config.admin_token
+    if not expected:
+        fail(404, "not_found", "This route is not enabled.")
+    if x_admin_token != expected:
+        fail(401, "unauthorized", "A valid X-Admin-Token header is required.")
     return {"summary": agent.run_cycle()}
 
 

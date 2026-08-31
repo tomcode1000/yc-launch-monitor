@@ -55,6 +55,11 @@ class Config:
         return os.environ.get("SLACK_CHANNEL", "#yc-alerts")
 
     @property
+    def admin_token(self) -> str | None:
+        """Guards /admin/scan. Unset means the route is not exposed at all."""
+        return os.environ.get("ADMIN_TOKEN") or None
+
+    @property
     def pond_access_key(self) -> str | None:
         return os.environ.get("POND_ACCESS_KEY")
 
