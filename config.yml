@@ -63,7 +63,11 @@ sources:
       - "a16z speedrun"
       - "joining SPEEDRUN"
       - "backed by a16z"
-    apify_actor: "apidojo/tweet-scraper"
+    # apidojo/tweet-scraper answers every search with placeholder objects
+    # carrying only {"noResults": true} - it returns nothing real. The lite
+    # actor from the same publisher takes identical parameters and returns
+    # actual tweets, so this is a one-line swap.
+    apify_actor: "apidojo/twitter-scraper-lite"
 
   linkedin:
     enabled: true
