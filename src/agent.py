@@ -362,10 +362,18 @@ class MonitorAgent:
         would skip it and report "no social candidates" - which reads exactly
         like a working scan that found nothing. Used by /admin/scan.
         """
-        x = self.sources.get("x")
-        if x is not None and hasattr(x, "_last_keyword_run"):
-            x._last_keyword_run = 0.0
-            x._cooldown_until = 0.0
+        for name in ("x", "linkedin"):
+            src = self.sources.get(name)
+            if src is None:
+                continue
+            # Both gates have to open. gather_social_candidates checks the
+            # source's own poll interval first, and the scheduler has usually
+            # just run it, so clearing only the keyword timer left the source
+            # skipped before the keyword tier was ever consulted.
+            src._last_run = 0.0
+            if hasattr(src, "_last_keyword_run"):
+                src._last_keyword_run = 0.0
+                src._cooldown_until = 0.0
 
     def gather_social_candidates(self) -> list:
         """Collect X/LinkedIn signals that survive the free rules prefilter."""
