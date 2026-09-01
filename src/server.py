@@ -273,6 +273,10 @@ def admin_scan(x_admin_token: str | None = Header(default=None)) -> dict[str, An
         fail(404, "not_found", "This route is not enabled.")
     if x_admin_token != expected:
         fail(401, "unauthorized", "A valid X-Admin-Token header is required.")
+    # A manual scan should actually scan: without this the time-gated keyword
+    # tier is skipped and the response says "no social candidates", which is
+    # indistinguishable from a sweep that ran and found nothing.
+    agent.force_keyword_sweep()
     return {"summary": agent.run_cycle()}
 
 

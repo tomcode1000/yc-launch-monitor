@@ -34,15 +34,13 @@ sources:
     enabled: true
     interval_seconds: 180
     # Tier 1: free profile timelines, no account needed. Staggered across ticks.
-    watchlist:
-      - ycombinator
-      - paulg
-      - garrytan
-      - sdianahu
-      - snowmaker
-      - jaredfriedman
+    # Empty: tiers 1 and 2 (free syndication timelines) are off. They are
+    # rate-limited by IP, returned 429 constantly, and produced noise in the
+    # logs that made the paid keyword tier hard to reason about. The Apify
+    # keyword search is the one path that finds founders we do not follow.
+    watchlist: []
     # Tier 3: keyword search. Off unless APIFY_TOKEN is set and X_KEYWORD_TIER=apify.
-    keyword_interval_seconds: 1800
+    keyword_interval_seconds: 900
     # ~$0.01/item, so 50 items is ~$0.50 per keyword sweep. Sized for an
     # announcement burst, when 15 would truncate the newest posts.
     max_items_per_run: 50
@@ -70,7 +68,10 @@ sources:
     apify_actor: "apidojo/twitter-scraper-lite"
 
   linkedin:
-    enabled: true
+    # Off. Every run billed per item and returned nothing usable; the source
+    # stays implemented and can be re-enabled with one word when it is worth
+    # paying for again.
+    enabled: false
     # Metered. 6h keeps the bill near $22/mo; every minute would be ~$360/day.
     interval_seconds: 21600
     apify_actor: "apimaestro/linkedin-posts-search-scraper-no-cookies"

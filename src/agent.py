@@ -355,6 +355,18 @@ class MonitorAgent:
         if cost:
             self.store.add_spend(source.name, cost)
 
+    def force_keyword_sweep(self) -> None:
+        """Clear the keyword tier's interval so the next cycle sweeps now.
+
+        The paid sweep is time-gated, so a manual trigger inside the interval
+        would skip it and report "no social candidates" - which reads exactly
+        like a working scan that found nothing. Used by /admin/scan.
+        """
+        x = self.sources.get("x")
+        if x is not None and hasattr(x, "_last_keyword_run"):
+            x._last_keyword_run = 0.0
+            x._cooldown_until = 0.0
+
     def gather_social_candidates(self) -> list:
         """Collect X/LinkedIn signals that survive the free rules prefilter."""
         since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
