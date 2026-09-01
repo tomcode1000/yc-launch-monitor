@@ -1,5 +1,7 @@
 # YC Launch Monitor
 
+**Live:** https://yc-launch-monitor-production.up.railway.app
+
 A Slack bot that alerts you to new Y Combinator and SPEEDRUN companies — including the ones whose founders have announced on social media **before the official directory lists them**.
 
 Built as a Pond Protocol agent, so it runs autonomously *and* answers on demand.
