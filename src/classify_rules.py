@@ -41,7 +41,12 @@ NEGATIVE = [
 
 # Phrases that indicate a genuine acceptance by the poster.
 POSITIVE = re.compile(
-    r"\b(got\s+into|accepted\s+(in)?to|we'?re\s+in\b|joining\s+(yc|y\s+combinator|speedrun)"
+    # "got into", but also "got us into", "made it into" - an object between
+    # the verb and the preposition is ordinary phrasing, and requiring them to
+    # be adjacent quietly dropped real announcements.
+    r"\b(got\s+(\w+\s+){0,3}into|made\s+it\s+(\w+\s+){0,2}into"
+    r"|accepted\s+(\w+\s+){0,2}(in)?to|we'?re\s+in\b|we\s+are\s+in\b"
+    r"|(in|into)\s+the\s+\w*\s*batch|joining\s+(yc|y\s+combinator|speedrun)"
     r"|part\s+of\s+(the\s+)?(yc|y\s+combinator|speedrun)|backed\s+by\s+y\s+combinator"
     r"|thrilled\s+to\s+(share|announce)|excited\s+to\s+(share|announce)"
     r"|proud\s+to\s+announce)", re.I)

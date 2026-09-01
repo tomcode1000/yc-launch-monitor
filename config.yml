@@ -51,21 +51,12 @@ sources:
       - "got into YC"
       - "we got into YC"
       - "accepted into Y Combinator"
-      - "joining Y Combinator"
-      - "backed by Y Combinator"
-      - "part of YC"
-      - "YC F26"
-      - "YC W27"
-      - "YC S26"
-      - "YC X26"
-      - "a16z speedrun"
-      - "joining SPEEDRUN"
-      - "backed by a16z"
     # apidojo/tweet-scraper answers every search with placeholder objects
     # carrying only {"noResults": true} - it returns nothing real. The lite
     # actor from the same publisher takes identical parameters and returns
     # actual tweets, so this is a one-line swap.
-    apify_actor: "apidojo/twitter-scraper-lite"
+    apify_actor: "watcher.data/search-x-by-keywords"
+    max_items_per_term: 50
 
   linkedin:
     enabled: true

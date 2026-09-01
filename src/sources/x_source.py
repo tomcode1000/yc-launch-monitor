@@ -178,56 +178,41 @@ class XSource(Source):
     def _fetch_keywords(self, since: datetime) -> list[RawSignal]:
         from .apify import run_actor
 
-        actor = self.config.get("apify_actor", "apidojo/tweet-scraper")
+        actor = self.config.get("apify_actor")
         terms = self.config.get("keywords") or []
 
-        # One call per term, not one call for all of them. The actor returns at
-        # most ten items per run regardless of maxItems, so a combined query
-        # yields ten results shared across every keyword - during a busy spell
-        # that is a few hours of history, and an announcement from yesterday
-        # falls out of the window entirely. Per-term calls give each keyword its
-        # own ten, and `start` bounds the search to the lookback period so we do
-        # not pay for tweets older than we would act on.
-        per_term = int(self.config.get("max_items_per_term", 10))
-        budget = int(self.config.get("max_terms_per_sweep", len(terms)))
-        items: list[dict] = []
-        seen_ids: set[str] = set()
-        for term in terms[:budget]:
-            try:
-                batch = run_actor(
-                    actor,
-                    self.apify_token,
-                    {
-                        "searchTerms": [term],
-                        "maxItems": per_term,
-                        "sort": "Latest",
-                        "start": since.strftime("%Y-%m-%d"),
-                    },
-                )
-            except Exception as exc:  # noqa: BLE001 - one dead term is not fatal
-                log.warning("keyword %r failed: %s", term, str(exc)[:120])
-                continue
-            # The actor answers an empty search with placeholder objects that
-            # carry only {"noResults": true}. Counting those as items makes a
-            # dead search look like a full one, which is how this went
-            # unnoticed: ten "results" every sweep, none of them a tweet.
-            real = [i for i in batch if not i.get("noResults")]
-            if batch and not real:
-                log.info("keyword %r returned no matches", term)
-            for item in real:
-                tid = str(item.get("id") or item.get("id_str") or "")
-                if tid and tid not in seen_ids:
-                    seen_ids.add(tid)
-                    items.append(item)
-        log.info("keyword sweep: %d terms -> %d unique tweets",
-                 min(len(terms), budget), len(items))
+        # This actor takes every keyword in one run and applies the limit per
+        # keyword, so a busy phrase cannot crowd out a quiet one and there is
+        # no need to fan out into one call per term.
+        items = run_actor(
+            actor,
+            self.apify_token,
+            {
+                "searchType": "tweets",
+                "keywords": terms,
+                "maxItemsPerKeyword": int(
+                    self.config.get("max_items_per_term", 50)),
+                "sortBy": "latest",
+            },
+        )
+        items = [i for i in items
+                 if isinstance(i, dict) and not i.get("noResults")]
+        log.info("keyword sweep: %d terms -> %d tweets", len(terms), len(items))
+
         out: list[RawSignal] = []
         for item in items:
             tid = str(item.get("id") or item.get("id_str") or "")
             if not tid:
                 continue
             created = _parse_time(item.get("createdAt") or item.get("created_at"))
-            author = (item.get("author") or {}).get("userName") or item.get("username")
+            # Actors disagree on this field: some nest it as
+            # author.userName, this one returns a plain "@handle" string.
+            raw_author = item.get("author")
+            if isinstance(raw_author, dict):
+                author = raw_author.get("userName") or raw_author.get("screen_name")
+            else:
+                author = raw_author or item.get("username")
+            author = (author or "").lstrip("@") or None
             out.append(
                 RawSignal(
                     source=self.name,
