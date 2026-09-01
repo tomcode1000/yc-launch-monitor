@@ -180,15 +180,47 @@ class XSource(Source):
 
         actor = self.config.get("apify_actor", "apidojo/tweet-scraper")
         terms = self.config.get("keywords") or []
-        items = run_actor(
-            actor,
-            self.apify_token,
-            {
-                "searchTerms": terms,
-                "maxItems": int(self.config.get("max_items_per_run", 50)),
-                "sort": "Latest",
-            },
-        )
+
+        # One call per term, not one call for all of them. The actor returns at
+        # most ten items per run regardless of maxItems, so a combined query
+        # yields ten results shared across every keyword - during a busy spell
+        # that is a few hours of history, and an announcement from yesterday
+        # falls out of the window entirely. Per-term calls give each keyword its
+        # own ten, and `start` bounds the search to the lookback period so we do
+        # not pay for tweets older than we would act on.
+        per_term = int(self.config.get("max_items_per_term", 10))
+        budget = int(self.config.get("max_terms_per_sweep", len(terms)))
+        items: list[dict] = []
+        seen_ids: set[str] = set()
+        for term in terms[:budget]:
+            try:
+                batch = run_actor(
+                    actor,
+                    self.apify_token,
+                    {
+                        "searchTerms": [term],
+                        "maxItems": per_term,
+                        "sort": "Latest",
+                        "start": since.strftime("%Y-%m-%d"),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - one dead term is not fatal
+                log.warning("keyword %r failed: %s", term, str(exc)[:120])
+                continue
+            # The actor answers an empty search with placeholder objects that
+            # carry only {"noResults": true}. Counting those as items makes a
+            # dead search look like a full one, which is how this went
+            # unnoticed: ten "results" every sweep, none of them a tweet.
+            real = [i for i in batch if not i.get("noResults")]
+            if batch and not real:
+                log.info("keyword %r returned no matches", term)
+            for item in real:
+                tid = str(item.get("id") or item.get("id_str") or "")
+                if tid and tid not in seen_ids:
+                    seen_ids.add(tid)
+                    items.append(item)
+        log.info("keyword sweep: %d terms -> %d unique tweets",
+                 min(len(terms), budget), len(items))
         out: list[RawSignal] = []
         for item in items:
             tid = str(item.get("id") or item.get("id_str") or "")
