@@ -25,6 +25,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+from . import agent as agent_module
 from .agent import MonitorAgent
 from .config import load_config
 from .manifest import PROTOCOL_VERSION, build_manifest
@@ -247,6 +248,14 @@ def health() -> dict[str, Any]:
         "slack_configured": notifier.configured,
         "model_configured": agent.client is not None,
         "spend_today_usd": round(store.spend_today(), 4),
+        # Which commit is actually serving. Hosts can keep rebuilding a pinned
+        # or cached revision while the repo moves on, and without this the only
+        # way to tell is inferring it from behaviour.
+        "commit": (os.environ.get("RAILWAY_GIT_COMMIT_SHA")
+                   or os.environ.get("GIT_COMMIT_SHA") or "unknown")[:7],
+        "lookback_days": agent_module.LOOKBACK_DAYS,
+        "x_actor": config.source("x").get("apify_actor"),
+        "linkedin_actor": config.source("linkedin").get("apify_actor"),
     }
 
 
