@@ -97,3 +97,50 @@ if __name__ == "__main__":
                 print(f"  FAIL  {name}: {exc}")
     print("ok" if not failures else f"{failures} failure(s)")
     sys.exit(1 if failures else 0)
+
+
+def test_directory_pass_runs_against_a_populated_store():
+    """The non-seeding branch must execute, not just the empty-store one.
+
+    A regression guard: `if seeding or not announce` short-circuits when the
+    store is empty, so a fresh-database test never evaluates the second half.
+    That hid an unbound `announce` which crashed every scheduled cycle in
+    production while the test suite stayed green.
+    """
+    from src.agent import MonitorAgent
+    from src.config import load_config
+    from src.slack import SlackNotifier
+
+    store = Store(Path(tempfile.mkdtemp()) / "seeded.db")
+    store.note_company("existing", "Existing Co", "yc", "S26")
+    assert store.company_count() == 1, "store must be non-empty to hit the branch"
+
+    class OneListingSource:
+        """Must yield a signal: `announce` is read inside the per-signal loop,
+        so a source returning nothing never reaches the broken line."""
+
+        name = "yc_directory"
+        enabled = True
+        last_item_count = 1
+
+        def collect(self, since):
+            return [RawSignal(
+                source="yc_directory", external_id="c-1",
+                text="Acme Robotics", url="https://ycombinator.com/companies/acme",
+                created_at=datetime.now(timezone.utc), author=None,
+                raw={"name": "Acme Robotics"},
+            )]
+
+        def to_alert_fields(self, raw):
+            return {"company": raw["name"], "program": "yc", "batch": "S26",
+                    "website": None, "description": None, "url": None}
+
+        def estimated_cost(self, n):
+            return 0.0
+
+    agent = MonitorAgent(
+        load_config(), store, {"yc_directory": OneListingSource()},
+        SlackNotifier(None, "#test"),
+    )
+    # Must not raise NameError on the `announce` lookup.
+    assert "Directory pass" in agent.run_directory_pass()

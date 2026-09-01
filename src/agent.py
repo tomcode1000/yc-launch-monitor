@@ -487,6 +487,11 @@ class MonitorAgent:
             source = self.sources.get(name)
             if not source or not source.enabled:
                 continue
+            # A listing here is already-public news, so it stays silent unless
+            # this source is explicitly configured to announce.
+            announce = bool(
+                self.config.source(name).get("alert_on_new_listing", False))
+
             collected = source.collect(since)
             self._book_spend(source)
             for sig in collected:
