@@ -422,11 +422,19 @@ class MonitorAgent:
 
             self.store.record_signal(
                 sig, company_key=key, claim_type=claim.value, confidence=confidence)
-            self.notifier.send(
+            delivered = self.notifier.send(
                 company=company, status=status, program=program.value, batch=batch,
                 founder=sig.author, source="X" if sig.source == "x" else "LinkedIn",
                 url=sig.url, quote=sig.text[:280],
             )
+            if not delivered:
+                # Slack rejected it or the network failed. Give the slot back so
+                # the next cycle retries, rather than recording a lead as
+                # delivered that nobody ever received.
+                log.warning("delivery failed for %s; releasing slot for retry", key)
+                self.store.release_alert_slot(key)
+                skipped += 1
+                continue
             alerted += 1
         return f"Rules pass: {alerted} alert(s), {skipped} skipped of {len(candidates)}."
 
@@ -508,12 +516,15 @@ class MonitorAgent:
                 ):
                     continue
                 self.store.record_signal(sig, company_key=key)
-                self.notifier.send(
+                if not self.notifier.send(
                     company=fields["company"], status="confirmed",
                     program=fields["program"], batch=fields["batch"],
                     source="YC Directory" if name == "yc_directory" else "Speedrun",
                     description=fields.get("description"), url=fields.get("url"),
-                )
+                ):
+                    log.warning("delivery failed for %s; releasing slot", key)
+                    self.store.release_alert_slot(key)
+                    continue
                 sent += 1
         if seeded and not sent:
             return (f"Directory pass: {seeded} listing(s) recorded as "

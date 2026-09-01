@@ -151,6 +151,19 @@ class Store:
             self._conn.commit()
             return True
 
+    def release_alert_slot(self, key: str) -> None:
+        """Hand back a claimed slot when delivery failed.
+
+        Slots are claimed before sending so two cycles cannot race to alert the
+        same lead. If the send then fails, holding the claim would retire the
+        lead permanently: it counts as delivered and is never retried. Clearing
+        alerted_at puts it back in play for the next cycle.
+        """
+        with self._lock:
+            self._conn.execute(
+                "UPDATE companies SET alerted_at = NULL WHERE key = ?", (key,))
+            self._conn.commit()
+
     def note_company(self, key: str, name: str, program: str, batch: str | None) -> None:
         """Record a company without alerting - used for directory backfill."""
         with self._lock:
