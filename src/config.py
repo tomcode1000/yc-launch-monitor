@@ -52,7 +52,14 @@ class Config:
 
     @property
     def slack_channel(self) -> str:
-        return os.environ.get("SLACK_CHANNEL", "#yc-alerts")
+        """Destination channel, tolerant of how hosts mangle the value.
+
+        An empty SLACK_CHANNEL is treated as unset rather than passed through:
+        several dashboards strip everything from a '#' onwards as a comment, so
+        '#yc-alerts' arrives empty. Sending to an empty channel fails on every
+        alert, and the failure is only visible in the logs.
+        """
+        return os.environ.get("SLACK_CHANNEL", "").strip() or "#yc-alerts"
 
     @property
     def admin_token(self) -> str | None:
