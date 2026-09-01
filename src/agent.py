@@ -37,6 +37,10 @@ from .models import AlertStatus, lead_key, normalize_batch, normalize_company
 
 log = logging.getLogger(__name__)
 
+# How far back each cycle looks. Wide enough to cover a first run and any
+# missed cycles; dedupe, not the window, is what prevents repeat alerts.
+LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "5"))
+
 CYCLE_PROMPT = """\
 You are monitoring for companies newly accepted into Y Combinator or a16z \
 SPEEDRUN, with one priority above all others: find founders who have announced \
@@ -289,7 +293,7 @@ class MonitorAgent:
         if self.store.company_count() > 0:
             return 0
 
-        since = datetime.now(timezone.utc) - timedelta(days=3)
+        since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
         seeded = 0
         for name in ("yc_directory", "yc_speedrun"):
             source = self.sources.get(name)
@@ -353,7 +357,7 @@ class MonitorAgent:
 
     def gather_social_candidates(self) -> list:
         """Collect X/LinkedIn signals that survive the free rules prefilter."""
-        since = datetime.now(timezone.utc) - timedelta(days=3)
+        since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
         out = []
         for name in ("x", "linkedin"):
             source = self.sources.get(name)
@@ -473,7 +477,7 @@ class MonitorAgent:
         A company appearing in YC's own API needs no interpretation, so this
         path runs on every cycle regardless of LLM_MODE and costs nothing.
         """
-        since = datetime.now(timezone.utc) - timedelta(days=3)
+        since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
 
         # First run against an empty store is a backfill, not news: every
         # company YC has ever listed looks "new" to us. Record them silently so

@@ -23,6 +23,20 @@ SPEEDRUN_RE = re.compile(r"\bspeed\s?run\b", re.IGNORECASE)
 
 YC_RE = re.compile(r"\b(y[\s-]?combinator|yc)\b", re.IGNORECASE)
 
+# An explicit acceptance, stated in the first person. Plenty of founders
+# announce without ever naming a batch - "the video that got us into YC" is a
+# real lead - so this lets the prefilter keep them without opening the gate to
+# every passing mention of the program.
+ACCEPTED_RE = re.compile(
+    r"\b("
+    # "got us into", "got my startup into" - allow an object in between
+    r"(got|getting|made\s+it|accepted)\s+(\w+\s+){0,3}(in|into)"
+    r"|(we|we'?re|i'?m)\s+(in|into|part\s+of|joining)"
+    r"|joined|joining|backed\s+by"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 class Program(str, Enum):
     YC = "yc"
@@ -69,11 +83,14 @@ class RawSignal:
         """Cheap prefilter. Runs before any model call.
 
         Cuts the overwhelming majority of collected posts for free. A signal
-        needs a program mention *and* a batch code, or an explicit Speedrun
-        mention - "excited about Y Combinator" on its own is not news.
+        needs a program mention plus either a batch code or explicit acceptance
+        wording - "excited about Y Combinator" on its own is not news, but
+        "the video that got us into YC" is, and it names no batch.
         """
+        mentions_yc = YC_RE.search(self.text) is not None
         has_batch = bool(BATCH_RE.search(self.text))
-        return (YC_RE.search(self.text) is not None and has_batch) or (
+        claims_acceptance = bool(ACCEPTED_RE.search(self.text))
+        return (mentions_yc and (has_batch or claims_acceptance)) or (
             SPEEDRUN_RE.search(self.text) is not None
         )
 

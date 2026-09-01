@@ -144,3 +144,28 @@ def test_directory_pass_runs_against_a_populated_store():
     )
     # Must not raise NameError on the `announce` lookup.
     assert "Directory pass" in agent.run_directory_pass()
+
+
+def test_prefilter_keeps_announcements_without_a_batch_code():
+    """Most founders never write the batch code.
+
+    Requiring one alongside the YC mention discarded real leads - "the video
+    that got us into YC" names no batch - so acceptance wording qualifies on
+    its own. The noise cases below are the ones that must still be rejected.
+    """
+    now = datetime.now(timezone.utc)
+
+    def relevant(text):
+        return RawSignal("x", "1", text, "u", now).looks_relevant()
+
+    for text in ("the video that got us into YC",
+                 "got my startup into YC",
+                 "we're part of YC now",
+                 "excited to share we joined Y Combinator"):
+        assert relevant(text), f"should keep: {text}"
+
+    for text in ("I really enjoy Y Combinator podcasts",
+                 "My timeline is full of YC Rejections",
+                 "applying to YC next cycle",
+                 "YC demo day was great this year"):
+        assert not relevant(text), f"should drop: {text}"
