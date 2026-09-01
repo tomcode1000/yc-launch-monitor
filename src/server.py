@@ -255,6 +255,11 @@ def health() -> dict[str, Any]:
                    or os.environ.get("GIT_COMMIT_SHA") or "unknown")[:7],
         "lookback_days": agent_module.LOOKBACK_DAYS,
         "x_actor": config.source("x").get("apify_actor"),
+        # The paid keyword tier is off unless this reads "apify" AND a token is
+        # present. Both are environment values, so a dashboard that mangles one
+        # silently disables the only source that finds founders we don't follow.
+        "x_keyword_tier": config.x_keyword_tier,
+        "apify_token_set": bool(config.apify_token),
         "linkedin_actor": config.source("linkedin").get("apify_actor"),
     }
 
