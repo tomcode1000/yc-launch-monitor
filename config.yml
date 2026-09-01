@@ -72,10 +72,28 @@ sources:
     apify_actor: "apimaestro/linkedin-posts-search-scraper-no-cookies"
     apify_actor_fallback: "harvestapi/linkedin-post-search"
     max_items_per_run: 10
+    # First-person announcement phrasings only. A bare "Y Combinator" matches
+    # every mention on the platform - investors congratulating portfolio
+    # companies, YC's own product posts, commentary - and we pay per item for
+    # all of it. The lead is a founder announcing their own acceptance, so the
+    # search should look like something a founder writes about themselves.
     keywords:
-      - "got into YC"
-      - "Y Combinator"
-      - "a16z SPEEDRUN"
+      - "we got into Y Combinator"
+      - "we got into YC"
+      - "excited to share that we got into"
+      - "accepted into Y Combinator"
+      - "joining Y Combinator"
+      - "we're part of YC"
+      - "thrilled to announce we've joined Y Combinator"
+      - "joining a16z SPEEDRUN"
+      - "accepted into a16z SPEEDRUN"
+      # Batch codes carry the announcement on their own and satisfy the
+      # classifier's batch requirement, which pure phrasings often do not:
+      # plenty of founders write "we got into YC" with no batch at all.
+      - "YC F26"
+      - "YC W27"
+      - "YC S26"
+      - "YC X26"
 
 slack:
   # Matches the alert cards in the task brief.
