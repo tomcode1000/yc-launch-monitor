@@ -46,13 +46,23 @@ sources:
     # ~$0.01/item, so 50 items is ~$0.50 per keyword sweep. Sized for an
     # announcement burst, when 15 would truncate the newest posts.
     max_items_per_run: 50
+    # Wider than the obvious phrasings: exact-phrase search on six variants
+    # matched only ten tweets, and founders announce in many ways. Batch codes
+    # are the highest-signal terms - almost nobody writes "YC F26" casually.
     keywords:
       - "got into YC"
+      - "we got into YC"
       - "accepted into Y Combinator"
       - "joining Y Combinator"
       - "backed by Y Combinator"
+      - "part of YC"
+      - "YC F26"
+      - "YC W27"
+      - "YC S26"
+      - "YC X26"
       - "a16z speedrun"
       - "joining SPEEDRUN"
+      - "backed by a16z"
     apify_actor: "apidojo/tweet-scraper"
 
   linkedin:

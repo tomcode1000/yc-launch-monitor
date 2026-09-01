@@ -56,10 +56,17 @@ class LinkedInSource(Source):
             ),
             self.config.get("apify_actor_fallback"),
             self.apify_token,
+            # Parameter names come from the actor's own input schema:
+            # keyword (one string), limit, sort_type. Sending "keywords" /
+            # "maxItems" was silently accepted and ignored, so the actor ran an
+            # empty search and returned a generic recent-posts feed - paid for,
+            # and containing nothing to do with YC.
             {
-                "keywords": self.config.get("keywords") or ["Y Combinator"],
-                "maxItems": max_items,
-                "sortBy": "date",
+                "keyword": " OR ".join(
+                    f'"{k}"' for k in (self.config.get("keywords")
+                                       or ["Y Combinator"])),
+                "limit": max_items,
+                "sort_type": "date_posted",
             },
         )
 
