@@ -68,11 +68,11 @@ sources:
     apify_actor: "apidojo/twitter-scraper-lite"
 
   linkedin:
-    # Off. Every run billed per item and returned nothing usable; the source
-    # stays implemented and can be re-enabled with one word when it is worth
-    # paying for again.
-    enabled: false
+    enabled: true
     # Metered. 6h keeps the bill near $22/mo; every minute would be ~$360/day.
+    # Six hours and ten items: LinkedIn is the thinnest of the four sources
+    # and bills per item, so it runs rarely and cheaply (~$0.05 a run) rather
+    # than being switched off entirely.
     interval_seconds: 21600
     apify_actor: "apimaestro/linkedin-posts-search-scraper-no-cookies"
     apify_actor_fallback: "harvestapi/linkedin-post-search"
