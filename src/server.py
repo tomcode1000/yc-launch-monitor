@@ -286,11 +286,50 @@ def index() -> str:
     return status_page.render(store, notifier, config, REPO_URL)
 
 
+def _source_rows() -> list[dict[str, Any]]:
+    """Every configured source, whether or not it has ever run.
+
+    Reporting only the sources with a stored row means a freshly deployed
+    on-request agent shows no LinkedIn at all until someone calls it, and an
+    absent source reads worse than a described one - the first rejection of
+    this listing was for a source that looked broken. So each source is listed
+    with an explicit state, and one that is merely waiting to be asked says so.
+    """
+    stored = {r["source"]: r for r in store.health()}
+    rows = []
+    for name, source in sources.items():
+        row = dict(stored.get(name) or {
+            "source": name, "last_run_at": None, "last_error": None,
+            "healthy": 1,
+        })
+        # Only a source with nothing free to do waits for a caller. X is mixed:
+        # its timeline tiers run on the timer and just its keyword sweep waits,
+        # so calling the whole source request-only would misreport it.
+        on_request = bool(source.metered and config.metered_on_request_only
+                          and not source.has_free_tier)
+        if not source.enabled:
+            row["state"] = "disabled"
+        elif row["last_run_at"] is None:
+            row["state"] = "awaiting_request" if on_request else "pending"
+        elif not row["healthy"]:
+            row["state"] = "degraded"
+        else:
+            row["state"] = "healthy"
+        # Says plainly why a paid source's last run can look old: it only runs
+        # when a caller asks, so staleness here is the design, not a fault.
+        row["runs_on_request_only"] = on_request
+        if (source.metered and config.metered_on_request_only
+                and source.has_free_tier):
+            row["paid_tier_on_request_only"] = True
+        rows.append(row)
+    return rows
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
         "ok": True,
-        "sources": store.health(),
+        "sources": _source_rows(),
         "slack_configured": notifier.configured,
         "model_configured": agent.client is not None,
         "spend_today_usd": round(store.spend_today(), 4),

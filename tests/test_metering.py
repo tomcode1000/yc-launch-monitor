@@ -160,3 +160,27 @@ def test_concurrent_cycles_still_deliver_the_requested_sweep(
         f"X keyword sweep lost under concurrency: {calls}"
     assert any("linkedin" in c for c in calls), \
         f"LinkedIn sweep lost under concurrency: {calls}"
+
+
+def test_a_paid_cycle_records_health_for_the_sources_it_touched(
+        tmp_path, monkeypatch):
+    """/health must show LinkedIn after an on-request run.
+
+    LinkedIn is only ever exercised by a request now. When the cycle did not
+    record its health, /health listed no LinkedIn row at all - which reads as
+    a missing source, the same misreading that got the listing rejected.
+    """
+    agent, sources, _ = _wire(tmp_path, monkeypatch)
+    agent.run_cycle(include_metered=True, force_metered=True)
+    recorded = {r["source"] for r in agent.store.health()}
+    assert "linkedin" in recorded, f"LinkedIn health not recorded: {recorded}"
+    assert "x" in recorded, f"X health not recorded: {recorded}"
+
+
+def test_an_unpaid_cycle_leaves_linkedin_health_untouched(tmp_path, monkeypatch):
+    """A free pass must not overwrite what LinkedIn's last real run reported."""
+    agent, sources, _ = _wire(tmp_path, monkeypatch)
+    agent.store.set_health("linkedin", False, "the error from the last real run")
+    agent.run_cycle(include_metered=False)
+    row = {r["source"]: r for r in agent.store.health()}["linkedin"]
+    assert row["last_error"] == "the error from the last real run"

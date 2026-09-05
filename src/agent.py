@@ -313,13 +313,7 @@ class MonitorAgent:
             announce = bool(self.config.source(name).get("alert_on_new_listing", False))
 
             collected = source.collect(since)
-            # Record health here rather than only in the scheduler: an
-            # on-request run is the only thing that ever exercises LinkedIn
-            # now, so if this pass does not record it, /health never shows
-            # the source at all and a reviewer reads the gap as a fault.
-            h = source.health()
-            self.store.set_health(source.name, h.healthy,
-                                  None if h.healthy else h.detail)
+            self._record_health(source)
             self._book_spend(source)
             for sig in collected:
                 fields = source.to_alert_fields(sig.raw)
@@ -414,6 +408,18 @@ class MonitorAgent:
                 src._last_keyword_run = 0.0
                 src._cooldown_until = 0.0
 
+    def _record_health(self, source) -> None:
+        """Persist what a source's last real run reported.
+
+        Done by the cycle rather than only by the scheduler: an on-request run
+        is the only thing that exercises the paid sources now, so without this
+        /health never lists them at all - and a reviewer reads that gap as a
+        broken source, which is how the listing was rejected the first time.
+        """
+        h = source.health()
+        self.store.set_health(source.name, h.healthy,
+                              None if h.healthy else h.detail)
+
     def gather_social_candidates(self, include_metered: bool = True) -> list:
         """Collect X/LinkedIn signals that survive the free rules prefilter.
 
@@ -435,6 +441,7 @@ class MonitorAgent:
                 log.debug("%s is fully metered and this pass is unpaid; skipping", name)
                 continue
             collected = source.collect(since)
+            self._record_health(source)
             self._book_spend(source)
             for sig in collected:
                 if self.store.seen_signal(sig.source, sig.external_id):
