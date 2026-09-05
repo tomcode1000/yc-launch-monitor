@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 
 # The Anthropic SDK is optional. This bot ships rules-only by default, so a
@@ -96,6 +97,13 @@ class MonitorAgent:
         #   auto   - rules first, model only on surviving social signals
         #   always - model every cycle
         self.llm_mode = os.environ.get("LLM_MODE", "off").lower()
+        # The background loop and the request handler share these Source
+        # objects, and a cycle mutates them - poll timers, and whether paid
+        # calls are permitted this pass. Two cycles interleaving let a free
+        # tick clear the paid flag a request had just set, so the request's
+        # sweep was skipped and the caller was billed for a result that
+        # reported "no social candidates". One cycle at a time.
+        self._cycle_lock = threading.Lock()
 
         self.client = None
         if self.llm_mode != "off":
@@ -305,6 +313,13 @@ class MonitorAgent:
             announce = bool(self.config.source(name).get("alert_on_new_listing", False))
 
             collected = source.collect(since)
+            # Record health here rather than only in the scheduler: an
+            # on-request run is the only thing that ever exercises LinkedIn
+            # now, so if this pass does not record it, /health never shows
+            # the source at all and a reviewer reads the gap as a fault.
+            h = source.health()
+            self.store.set_health(source.name, h.healthy,
+                                  None if h.healthy else h.detail)
             self._book_spend(source)
             for sig in collected:
                 fields = source.to_alert_fields(sig.raw)
@@ -321,7 +336,8 @@ class MonitorAgent:
         return seeded
 
     def run_cycle(self, instruction: str | None = None,
-                  include_metered: bool | None = None) -> str:
+                  include_metered: bool | None = None,
+                  force_metered: bool = False) -> str:
         """One monitoring pass, routed by how much judgment it actually needs.
 
         Directory arrivals are unambiguous - a company appearing in YC's own
@@ -335,9 +351,24 @@ class MonitorAgent:
         `include_metered` decides whether the paid sources are consulted at
         all. Left as None it follows config: on-request-only deployments pass
         True from the request path and False from the background loop.
+
+        `force_metered` clears the paid sources' poll timers first, so a
+        caller who asked for a scan gets one instead of being told there was
+        nothing to find by an interval that had not come round yet. It happens
+        under the same lock as the cycle, because a reset that another thread
+        can overwrite before the sweep reads it is no reset at all.
         """
         if include_metered is None:
             include_metered = not self.config.metered_on_request_only
+
+        with self._cycle_lock:
+            return self._run_cycle_locked(instruction, include_metered,
+                                          force_metered)
+
+    def _run_cycle_locked(self, instruction: str | None,
+                          include_metered: bool, force_metered: bool) -> str:
+        if force_metered:
+            self.force_keyword_sweep()
 
         parts = [self.run_directory_pass()]
 

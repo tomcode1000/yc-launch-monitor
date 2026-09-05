@@ -64,3 +64,99 @@ def test_unpaid_pass_makes_no_apify_call(monkeypatch):
     x.watchlist = []          # no handles, so tiers 1-2 do no network either
     x._discovered = set()
     assert x.fetch(datetime.now(timezone.utc)) == []
+
+
+def _wire(tmp_path, monkeypatch):
+    """An agent with the paid actors recorded instead of called."""
+    import src.sources.apify as apify
+    from src.config import load_config
+    from src.store import Store
+    from src.slack import SlackNotifier
+    from src.agent import MonitorAgent
+    from src.scheduler import build_sources
+    import src.sources.linkedin as lim
+
+    calls = []
+
+    def record(actor, *a, **k):
+        calls.append(actor)
+        return []
+
+    monkeypatch.setattr(apify, "run_actor", record)
+    monkeypatch.setattr(apify, "run_with_fallback", record)
+    monkeypatch.setattr(lim, "run_with_fallback", record)
+
+    cfg = load_config()
+    store = Store(tmp_path / "t.db")
+    sources = build_sources(cfg, store)
+    agent = MonitorAgent(cfg, store, sources, SlackNotifier(None, "#test"))
+    sources["x"]._fetch_timelines = lambda since: []   # isolate the paid tier
+    monkeypatch.setattr(agent, "run_directory_pass", lambda: "")
+    return agent, sources, calls
+
+
+def test_a_free_cycle_cannot_eat_the_timer_a_requested_sweep_needs(
+        tmp_path, monkeypatch):
+    """The defect a real Pond run exposed.
+
+    The background loop and the request handler drive the same Source objects.
+    A free background cycle calls x.collect(), which stamps the source's poll
+    timer - so when the request cycle reached X moments later, due() was False
+    and the paid sweep was skipped entirely. The caller was billed for a result
+    that had not looked at X at all.
+
+    LinkedIn survived only by accident: an unpaid cycle skips it outright, so
+    nothing stamped its timer.
+
+    The fix makes the reset part of the cycle rather than a call before it, so
+    nothing can land in between. This test models exactly that gap.
+    """
+    import time
+
+    agent, sources, calls = _wire(tmp_path, monkeypatch)
+    x = sources["x"]
+
+    # State a background free cycle leaves behind, in the window where the old
+    # code had already done its reset and had not yet reached X.
+    x._last_run = time.time()
+    x.allow_paid_calls(False)
+    x._last_keyword_run = time.time()
+
+    agent.run_cycle(include_metered=True, force_metered=True)
+
+    assert any("search-x-by-keywords" in c for c in calls), \
+        f"X keyword sweep was skipped: {calls}"
+    assert any("linkedin" in c for c in calls), \
+        f"LinkedIn sweep was skipped: {calls}"
+
+
+def test_concurrent_cycles_still_deliver_the_requested_sweep(
+        tmp_path, monkeypatch):
+    """Smoke test for the cycle lock under real concurrency.
+
+    A timing bug cannot be reproduced on demand, so this does not prove the
+    race is gone - the lock does that by construction, since two cycles can no
+    longer interleave. This guards against the lock being removed or a cycle
+    path being added that does not take it.
+    """
+    import threading
+
+    agent, sources, calls = _wire(tmp_path, monkeypatch)
+    stop = threading.Event()
+
+    def background():
+        while not stop.is_set():
+            agent.run_cycle(include_metered=False)
+
+    t = threading.Thread(target=background, daemon=True)
+    t.start()
+    try:
+        agent.run_cycle(include_metered=True, force_metered=True)
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+    assert any("search-x-by-keywords" in c for c in calls), \
+        f"X keyword sweep lost under concurrency: {calls}"
+    assert any("linkedin" in c for c in calls), \
+        f"LinkedIn sweep lost under concurrency: {calls}"

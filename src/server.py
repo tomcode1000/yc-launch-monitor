@@ -207,9 +207,9 @@ def _run_scan_task(run_id: str, task_id: str, prompt: str,
                 "daily spend cap $%.2f reached; run %s scans free sources only",
                 config.daily_spend_cap, run_id,
             )
-        else:
-            agent.force_keyword_sweep()
-        summary = agent.run_cycle(prompt or None, include_metered=not capped)
+        summary = agent.run_cycle(prompt or None,
+                                  include_metered=not capped,
+                                  force_metered=not capped)
 
         # The scan is not interruptible mid-flight, so overrunning is reported
         # rather than prevented. Saying so is the point: a caller that already
@@ -332,8 +332,8 @@ def admin_scan(x_admin_token: str | None = Header(default=None)) -> dict[str, An
     # A manual scan should actually scan: without this the time-gated keyword
     # tier is skipped and the response says "no social candidates", which is
     # indistinguishable from a sweep that ran and found nothing.
-    agent.force_keyword_sweep()
-    return {"summary": agent.run_cycle(include_metered=True)}
+    return {"summary": agent.run_cycle(include_metered=True,
+                                       force_metered=True)}
 
 
 # ---------------------------------------------------------------------------
