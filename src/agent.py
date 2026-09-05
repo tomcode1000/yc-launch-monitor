@@ -33,10 +33,16 @@ except ImportError:  # pragma: no cover - exercised by the no-SDK deployment
     def beta_tool(fn):  # type: ignore[misc]
         return fn
 
+from dataclasses import dataclass
+
 from . import classify_rules
 from .models import AlertStatus, lead_key, normalize_batch, normalize_company
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # How far back each cycle looks. Wide enough to cover a first run and any
 # missed cycles; dedupe, not the window, is what prevents repeat alerts.
@@ -78,6 +84,22 @@ same cycle got there first.
 
 Be decisive. If evidence is thin, say so and skip rather than guessing. \
 Finish by summarising what you alerted on and what you deliberately skipped."""
+
+
+@dataclass
+class CycleOutcome:
+    """What a cycle produced.
+
+    `results` is the billable quantity - leads actually delivered. Pond bills
+    on the usage a run reports, so this has to be what the caller received,
+    not a constant.
+    """
+
+    summary: str
+    results: int = 0
+
+    def __str__(self) -> str:      # callers that only want the text
+        return self.summary
 
 
 class MonitorAgent:
@@ -331,7 +353,8 @@ class MonitorAgent:
 
     def run_cycle(self, instruction: str | None = None,
                   include_metered: bool | None = None,
-                  force_metered: bool = False) -> str:
+                  force_metered: bool = False,
+                  max_results: int | None = None) -> CycleOutcome:
         """One monitoring pass, routed by how much judgment it actually needs.
 
         Directory arrivals are unambiguous - a company appearing in YC's own
@@ -356,17 +379,21 @@ class MonitorAgent:
             include_metered = not self.config.metered_on_request_only
 
         with self._cycle_lock:
-            return self._run_cycle_locked(instruction, include_metered,
-                                          force_metered)
+            started = _utcnow_iso()
+            summary = self._run_cycle_locked(instruction, include_metered,
+                                             force_metered, max_results)
+            # Counted from the store so every path that can alert is included.
+            return CycleOutcome(summary, self.store.count_alerts_since(started))
 
     def _run_cycle_locked(self, instruction: str | None,
-                          include_metered: bool, force_metered: bool) -> str:
+                          include_metered: bool, force_metered: bool,
+                          max_results: int | None) -> str:
         if force_metered:
             self.force_keyword_sweep()
 
         parts = [self.run_directory_pass()]
 
-        candidates = self.gather_social_candidates(include_metered)
+        candidates = self.gather_social_candidates(include_metered, max_results)
         if not candidates:
             parts.append("No social candidates; no model call made.")
             return " ".join(parts)
@@ -408,6 +435,28 @@ class MonitorAgent:
                 src._last_keyword_run = 0.0
                 src._cooldown_until = 0.0
 
+    def _item_budget(self, name: str, max_results: int | None) -> int | None:
+        """How many items to buy for a run that wants `max_results` leads.
+
+        A scan bills the caller per lead, so what it spends should follow what
+        was asked for rather than being the same fixed sweep every time. Leads
+        are far rarer than posts, so the ask is multiplied by a per-source
+        `items_per_result` and then clamped to the source's configured ceiling
+        - the ceiling stays the thing that bounds the bill.
+
+        None means "no request-specific budget"; the source uses its config.
+        """
+        if not max_results or max_results <= 0:
+            return None
+        cfg = self.config.source(name)
+        per = int(cfg.get("items_per_result", 0) or 0)
+        if per <= 0:
+            return None
+        ceiling = int(cfg.get("max_items_per_term")
+                      or cfg.get("max_items_per_run") or 0)
+        wanted = max_results * per
+        return min(wanted, ceiling) if ceiling else wanted
+
     def _record_health(self, source) -> None:
         """Persist what a source's last real run reported.
 
@@ -420,7 +469,8 @@ class MonitorAgent:
         self.store.set_health(source.name, h.healthy,
                               None if h.healthy else h.detail)
 
-    def gather_social_candidates(self, include_metered: bool = True) -> list:
+    def gather_social_candidates(self, include_metered: bool = True,
+                                 max_results: int | None = None) -> list:
         """Collect X/LinkedIn signals that survive the free rules prefilter.
 
         With `include_metered` False the paid sources are skipped without
@@ -434,6 +484,8 @@ class MonitorAgent:
             if not source or not source.enabled or not source.due():
                 continue
             source.allow_paid_calls(include_metered)
+            source.set_item_budget(
+                self._item_budget(name, max_results) if include_metered else None)
             if source.metered and not include_metered and not source.has_free_tier:
                 # Nothing this source can contribute without spending, so it is
                 # not touched at all - its recorded health stays whatever the

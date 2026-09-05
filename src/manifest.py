@@ -88,7 +88,18 @@ def build_manifest(config) -> dict[str, Any]:
                         "prompt": {
                             "type": "string",
                             "description": "Optional focus for this scan.",
-                        }
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 25,
+                            "description": (
+                                "How many leads to look for. This is the "
+                                "billed quantity and it sizes the search, so "
+                                "asking for fewer costs less. Defaults to the "
+                                "pricing plan's quantity."
+                            ),
+                        },
                     },
                     "required": [],
                     "additionalProperties": False,

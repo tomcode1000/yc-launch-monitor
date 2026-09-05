@@ -48,7 +48,8 @@ class LinkedInSource(Source):
         if not self.apify_token:
             return []
 
-        max_items = int(self.config.get("max_items_per_run", 50))
+        max_items = self.item_budget or int(
+            self.config.get("max_items_per_run", 50))
         items = run_with_fallback(
             self.config.get(
                 "apify_actor",

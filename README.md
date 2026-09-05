@@ -163,6 +163,14 @@ A marketplace agent is idle most of the time, and a six-hour timer spends the Ap
 - X keeps tiers 1–2 (free timeline polling) on every pass; only tier 3, the paid keyword sweep, waits for a request.
 - `DAILY_SPEND_CAP_USD` still applies on the request path: once tripped, a run scans the free sources and says so rather than failing.
 
+### Spend and billing both follow the leads asked for
+
+The listing is priced per result, so a run should cost what it was asked to produce:
+
+- `scan_now` takes **`max_results`** (1-25, default = the pricing plan's quantity). It is the billed unit *and* it sizes the search: each source buys `max_results x items_per_result` items, clamped to that source's ceiling in `config.yml`. Measured against live Apify, a `max_results=1` scan cost **$0.066** against **$0.123** for a full one.
+- The reported `usage.quantity` is **the leads actually delivered**, counted from the store after the run. A scan that finds nothing reports `0` and bills nothing; one that finds five reports five. It used to report a flat `1` either way, which charged for empty scans and undercharged for productive ones.
+- The per-source ceilings, not the caller, bound what any one run can spend. `DAILY_SPEND_CAP_USD` remains the backstop.
+
 **On "check every minute":** the sources that actually produce the scoop — the YC directory and the X watchlist — run at minute-level freshness. LinkedIn cannot. At $0.005/item a 50-post search costs ~$0.25 per run; every 6 hours is about **$22/month**, but every minute would be **~$360/day**. That is a bill constraint, not an effort one. The `DAILY_SPEND_CAP_USD` governor puts metered sources to sleep when tripped and reports it in the next Slack digest; the free sources keep running.
 
 ---

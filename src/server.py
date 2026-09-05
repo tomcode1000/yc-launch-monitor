@@ -43,6 +43,11 @@ log = logging.getLogger("yc-monitor")
 
 REPO_URL = "https://github.com/tomcode1000/yc-launch-monitor"
 
+# Upper bound on a single request's ask. The per-source ceilings in config.yml
+# still bound what any one run can buy; this stops a caller naming a number so
+# large the request is obviously not a real ask.
+MAX_RESULTS_CEILING = 25
+
 config = load_config()
 store = Store(config.db_path)
 notifier = SlackNotifier(config.slack_token, config.slack_channel)
@@ -128,6 +133,19 @@ def create_run(
 
     prompt = (run.parameters or {}).get("prompt") or ""
 
+    # How many leads the caller wants. This is the billing unit, and it also
+    # sizes the sweep - a run that is asked for two leads should not buy the
+    # volume of posts a run asked for twenty would. Defaults to the pricing
+    # plan's own quantity so an unspecified request costs what the listing says.
+    default_results = int(
+        (config.get("pond", {}) or {}).get("usage_quantity", 2))
+    max_results = (run.parameters or {}).get("max_results", default_results)
+    if not isinstance(max_results, int) or isinstance(max_results, bool):
+        fail(400, "invalid_request", "max_results must be an integer.")
+    if not 1 <= max_results <= MAX_RESULTS_CEILING:
+        fail(400, "invalid_request",
+             f"max_results must be between 1 and {MAX_RESULTS_CEILING}.")
+
     # execution.deadline_ms is the caller's ceiling, measured from acceptance.
     # The protocol does not oblige us to enforce it - Pond just stops polling
     # and records a timeout - but a deadline longer than the max_run_seconds
@@ -160,7 +178,8 @@ def create_run(
     store.put_run(run.run_id, "queued", task_id=task_id)
     threading.Thread(
         target=_run_scan_task,
-        args=(run.run_id, task_id, prompt, deadline_ms or max_run_ms),
+        args=(run.run_id, task_id, prompt, deadline_ms or max_run_ms,
+              max_results),
         daemon=True,
     ).start()
     return JSONResponse(
@@ -192,7 +211,7 @@ def get_task(task_id: str):
 
 
 def _run_scan_task(run_id: str, task_id: str, prompt: str,
-                   deadline_ms: int) -> None:
+                   deadline_ms: int, max_results: int) -> None:
     store.put_run(run_id, "running", task_id=task_id)
     started = time.monotonic()
     try:
@@ -207,9 +226,11 @@ def _run_scan_task(run_id: str, task_id: str, prompt: str,
                 "daily spend cap $%.2f reached; run %s scans free sources only",
                 config.daily_spend_cap, run_id,
             )
-        summary = agent.run_cycle(prompt or None,
+        outcome = agent.run_cycle(prompt or None,
                                   include_metered=not capped,
-                                  force_metered=not capped)
+                                  force_metered=not capped,
+                                  max_results=max_results)
+        summary = outcome.summary
 
         # The scan is not interruptible mid-flight, so overrunning is reported
         # rather than prevented. Saying so is the point: a caller that already
@@ -228,7 +249,11 @@ def _run_scan_task(run_id: str, task_id: str, prompt: str,
             "task_id": task_id,
             "status": "completed",
             "output": [{"type": "text", "text": summary}],
-            "usage": {"unit_of_measurement": "result", "quantity": 1},
+            # Bill for the leads actually delivered. Reporting a flat 1 charged
+            # the caller for a scan that found nothing and undercharged for one
+            # that found several - the spec bills on what this reports.
+            "usage": {"unit_of_measurement": "result",
+                      "quantity": outcome.results},
         }
         store.put_run(run_id, "completed", response, task_id=task_id)
     except Exception as exc:  # noqa: BLE001
@@ -371,8 +396,8 @@ def admin_scan(x_admin_token: str | None = Header(default=None)) -> dict[str, An
     # A manual scan should actually scan: without this the time-gated keyword
     # tier is skipped and the response says "no social candidates", which is
     # indistinguishable from a sweep that ran and found nothing.
-    return {"summary": agent.run_cycle(include_metered=True,
-                                       force_metered=True)}
+    outcome = agent.run_cycle(include_metered=True, force_metered=True)
+    return {"summary": outcome.summary, "results": outcome.results}
 
 
 # ---------------------------------------------------------------------------

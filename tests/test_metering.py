@@ -184,3 +184,80 @@ def test_an_unpaid_cycle_leaves_linkedin_health_untouched(tmp_path, monkeypatch)
     agent.run_cycle(include_metered=False)
     row = {r["source"]: r for r in agent.store.health()}["linkedin"]
     assert row["last_error"] == "the error from the last real run"
+
+
+def test_a_scan_that_finds_nothing_bills_nothing(tmp_path, monkeypatch):
+    """Pond bills on the usage a run reports.
+
+    The flat `quantity: 1` charged the caller for a scan that delivered no
+    leads, and paid the same for one that delivered several. The quantity has
+    to be what the caller actually received.
+    """
+    agent, _, _ = _wire(tmp_path, monkeypatch)
+    outcome = agent.run_cycle(include_metered=True, force_metered=True)
+    assert outcome.results == 0
+
+
+def test_only_leads_this_cycle_delivered_are_billed(tmp_path, monkeypatch):
+    """Leads from an earlier cycle must not be re-billed to a later caller."""
+    agent, _, _ = _wire(tmp_path, monkeypatch)
+    agent.store.claim_alert_slot("acme|a", "Acme", "yc", "F26", "x", "early",
+                                 founder="f", post_url="u")
+    outcome = agent.run_cycle(include_metered=True, force_metered=True)
+    assert outcome.results == 0
+
+
+def test_the_sweep_is_sized_by_the_leads_asked_for(tmp_path, monkeypatch):
+    """A request for fewer leads must buy fewer items.
+
+    The point of the on-request model is that spend follows demand. A fixed
+    sweep would charge the same whether the caller wanted one lead or twenty.
+    """
+    import src.sources.apify as apify
+    from src.config import load_config
+    from src.store import Store
+    from src.slack import SlackNotifier
+    from src.agent import MonitorAgent
+    from src.scheduler import build_sources
+    import src.sources.linkedin as lim
+
+    def sizes_for(ask):
+        seen = {}
+
+        def rec(actor, token, payload, **k):
+            if "search-x" in actor:
+                seen["x"] = payload.get("maxItemsPerKeyword")
+            return []
+
+        def rec_fb(primary, fallback, token, payload, **k):
+            seen["linkedin"] = payload.get("limit")
+            return []
+
+        monkeypatch.setattr(apify, "run_actor", rec)
+        monkeypatch.setattr(apify, "run_with_fallback", rec_fb)
+        monkeypatch.setattr(lim, "run_with_fallback", rec_fb)
+
+        cfg = load_config()
+        store = Store(tmp_path / f"s{ask}.db")
+        sources = build_sources(cfg, store)
+        agent = MonitorAgent(cfg, store, sources, SlackNotifier(None, "#t"))
+        sources["x"]._fetch_timelines = lambda since: []
+        monkeypatch.setattr(agent, "run_directory_pass", lambda: "")
+        agent.run_cycle(include_metered=True, force_metered=True,
+                        max_results=ask)
+        return seen
+
+    small, big = sizes_for(1), sizes_for(2)
+    assert small["x"] < big["x"], f"X not scaled: {small} vs {big}"
+    assert small["linkedin"] < big["linkedin"], \
+        f"LinkedIn not scaled: {small} vs {big}"
+
+
+def test_a_huge_ask_is_still_capped_by_config(tmp_path, monkeypatch):
+    """The per-source ceiling, not the caller, bounds what a run can spend."""
+    from src.config import load_config
+
+    cfg = load_config()
+    agent, _, _ = _wire(tmp_path, monkeypatch)
+    budget = agent._item_budget("x", 10_000)
+    assert budget == int(cfg.source("x")["max_items_per_term"])

@@ -73,6 +73,10 @@ sources:
     # the sweep is sorted latest-first, so the items dropped are the oldest
     # ones the lookback window would mostly have discarded anyway.
     max_items_per_term: 15
+    # Posts to buy per lead asked for. Leads are far rarer than posts, so a
+    # request for 2 leads buys 16 posts per term - clamped by the ceiling
+    # above, which stays the thing that bounds the bill.
+    items_per_result: 8
 
   linkedin:
     enabled: true
@@ -84,6 +88,7 @@ sources:
     apify_actor: "apimaestro/linkedin-posts-search-scraper-no-cookies"
     apify_actor_fallback: "harvestapi/linkedin-post-search"
     max_items_per_run: 10
+    items_per_result: 5
     # First-person announcement phrasings only. A bare "Y Combinator" matches
     # every mention on the platform - investors congratulating portfolio
     # companies, YC's own product posts, commentary - and we pay per item for

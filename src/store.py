@@ -217,6 +217,20 @@ class Store:
         ).fetchone()
         return int(row["n"]) if row else 0
 
+    def count_alerts_since(self, since_iso: str) -> int:
+        """How many leads were actually delivered since `since_iso`.
+
+        Counted from the store rather than tallied per code path, because a
+        cycle can alert from the directory pass, the rules pass or the model
+        pass, and Pond bills on what this number says. A count that only some
+        paths increment would bill the caller for leads they never got.
+        """
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM companies WHERE alerted_at >= ?",
+            (since_iso,),
+        ).fetchone()
+        return int(row["n"] if row else 0)
+
     def recent_alerts(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             """SELECT name, batch, program, alert_status, alerted_at, source,

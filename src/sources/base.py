@@ -47,6 +47,10 @@ class Source(ABC):
         # unpaid, a Pond request runs them paid. Default True so nothing that
         # does not know about the flag changes behaviour.
         self.paid_calls_allowed = True
+        # How many items this pass may buy, or None to use the configured
+        # size. Set per cycle from the number of leads the caller asked for,
+        # so a request that wants two leads does not pay for twenty.
+        self.item_budget: int | None = None
         self.interval_seconds = int(
             interval_seconds or self.config.get("interval_seconds", 3600)
         )
@@ -91,6 +95,9 @@ class Source(ABC):
 
     def allow_paid_calls(self, allowed: bool) -> None:
         self.paid_calls_allowed = bool(allowed)
+
+    def set_item_budget(self, budget: int | None) -> None:
+        self.item_budget = int(budget) if budget else None
 
     def health(self) -> SourceHealth:
         return self._health

@@ -201,7 +201,7 @@ class XSource(Source):
             {
                 "searchType": "tweets",
                 "keywords": terms,
-                "maxItemsPerKeyword": int(
+                "maxItemsPerKeyword": self.item_budget or int(
                     self.config.get("max_items_per_term", 50)),
                 "sortBy": "latest",
             },

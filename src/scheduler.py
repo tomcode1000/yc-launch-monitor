@@ -135,7 +135,7 @@ class MonitorScheduler:
         log.info("cycle (%s): %s",
                  "paid" if paid else "free sources only",
                  ", ".join(s.name for s in runnable))
-        summary = self.agent.run_cycle(include_metered=paid)
+        summary = self.agent.run_cycle(include_metered=paid).summary
 
         for source in runnable:
             health = source.health()
@@ -146,4 +146,4 @@ class MonitorScheduler:
 
     def run_once(self) -> str:
         """Single synchronous pass. Used by /admin/scan and the CLI."""
-        return self.agent.run_cycle()
+        return self.agent.run_cycle().summary
