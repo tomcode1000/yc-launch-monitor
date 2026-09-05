@@ -320,7 +320,8 @@ class MonitorAgent:
         log.info("bootstrap seeded %d existing companies (no alerts sent)", seeded)
         return seeded
 
-    def run_cycle(self, instruction: str | None = None) -> str:
+    def run_cycle(self, instruction: str | None = None,
+                  include_metered: bool | None = None) -> str:
         """One monitoring pass, routed by how much judgment it actually needs.
 
         Directory arrivals are unambiguous - a company appearing in YC's own
@@ -330,10 +331,17 @@ class MonitorAgent:
 
         That gate is what stops a 60-second directory poll from firing an Opus
         tool loop every minute.
+
+        `include_metered` decides whether the paid sources are consulted at
+        all. Left as None it follows config: on-request-only deployments pass
+        True from the request path and False from the background loop.
         """
+        if include_metered is None:
+            include_metered = not self.config.metered_on_request_only
+
         parts = [self.run_directory_pass()]
 
-        candidates = self.gather_social_candidates()
+        candidates = self.gather_social_candidates(include_metered)
         if not candidates:
             parts.append("No social candidates; no model call made.")
             return " ".join(parts)
@@ -375,13 +383,25 @@ class MonitorAgent:
                 src._last_keyword_run = 0.0
                 src._cooldown_until = 0.0
 
-    def gather_social_candidates(self) -> list:
-        """Collect X/LinkedIn signals that survive the free rules prefilter."""
+    def gather_social_candidates(self, include_metered: bool = True) -> list:
+        """Collect X/LinkedIn signals that survive the free rules prefilter.
+
+        With `include_metered` False the paid sources are skipped without
+        being touched, so no Apify credit is spent and their recorded health
+        keeps whatever the last real run reported rather than being reset.
+        """
         since = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
         out = []
         for name in ("x", "linkedin"):
             source = self.sources.get(name)
             if not source or not source.enabled or not source.due():
+                continue
+            source.allow_paid_calls(include_metered)
+            if source.metered and not include_metered and not source.has_free_tier:
+                # Nothing this source can contribute without spending, so it is
+                # not touched at all - its recorded health stays whatever the
+                # last real run reported instead of being overwritten.
+                log.debug("%s is fully metered and this pass is unpaid; skipping", name)
                 continue
             collected = source.collect(since)
             self._book_spend(source)

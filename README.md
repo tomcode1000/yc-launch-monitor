@@ -153,6 +153,16 @@ The four sources have very different cost and fragility profiles, so each has it
 | X (keyword) | 30 min | free/paid | The fragile tier, off by default |
 | LinkedIn | 6 h | **~$22/mo** | Metered per item — the hard ceiling |
 
+### On-request metering (`metered_on_request_only`)
+
+A marketplace agent is idle most of the time, and a six-hour timer spends the Apify balance whether or not anyone has asked for anything. With `metered_on_request_only: true` in `config.yml` (override with `METERED_ON_REQUEST_ONLY` in the environment):
+
+- The **background loop stays running** and keeps the free sources warm — the YC directory watch, SPEEDRUN, and the X watchlist tiers. Alerts, the Slack digest and `/health` are live between requests.
+- The **paid Apify calls fire only on demand**: `POST /runs` from Pond, or `POST /admin/scan` from an operator. Both clear the interval gates first, so a request gets a real sweep rather than "no social candidates" from a timer that had not come round yet.
+- LinkedIn has no free tier, so it is skipped whole on an unpaid pass — and is not touched, so its recorded health keeps what the last real run reported.
+- X keeps tiers 1–2 (free timeline polling) on every pass; only tier 3, the paid keyword sweep, waits for a request.
+- `DAILY_SPEND_CAP_USD` still applies on the request path: once tripped, a run scans the free sources and says so rather than failing.
+
 **On "check every minute":** the sources that actually produce the scoop — the YC directory and the X watchlist — run at minute-level freshness. LinkedIn cannot. At $0.005/item a 50-post search costs ~$0.25 per run; every 6 hours is about **$22/month**, but every minute would be **~$360/day**. That is a bill constraint, not an effort one. The `DAILY_SPEND_CAP_USD` governor puts metered sources to sleep when tripped and reports it in the next Slack digest; the free sources keep running.
 
 ---

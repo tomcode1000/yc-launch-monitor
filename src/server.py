@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -127,6 +128,21 @@ def create_run(
 
     prompt = (run.parameters or {}).get("prompt") or ""
 
+    # execution.deadline_ms is the caller's ceiling, measured from acceptance.
+    # The protocol does not oblige us to enforce it - Pond just stops polling
+    # and records a timeout - but a deadline longer than the max_run_seconds
+    # we advertise is a contradiction we should reject rather than accept and
+    # quietly under-deliver on.
+    deadline_ms = (run.execution or {}).get("deadline_ms")
+    max_run_ms = build_manifest(config)["limits"]["max_run_seconds"] * 1000
+    if deadline_ms is not None:
+        if not isinstance(deadline_ms, int) or deadline_ms <= 0:
+            fail(400, "invalid_request", "deadline_ms must be a positive integer.")
+        if deadline_ms > max_run_ms:
+            fail(400, "invalid_request",
+                 f"deadline_ms exceeds the advertised max_run_seconds "
+                 f"({max_run_ms // 1000}s).")
+
     # A full scan cannot be guaranteed to finish inside the deadline, so accept
     # it as a task and let Pond poll. A state query answers immediately.
     if run.action_id == "query_state":
@@ -143,7 +159,9 @@ def create_run(
     task_id = f"task_{uuid.uuid4().hex[:16]}"
     store.put_run(run.run_id, "queued", task_id=task_id)
     threading.Thread(
-        target=_run_scan_task, args=(run.run_id, task_id, prompt), daemon=True
+        target=_run_scan_task,
+        args=(run.run_id, task_id, prompt, deadline_ms or max_run_ms),
+        daemon=True,
     ).start()
     return JSONResponse(
         status_code=202,
@@ -173,10 +191,38 @@ def get_task(task_id: str):
     }
 
 
-def _run_scan_task(run_id: str, task_id: str, prompt: str) -> None:
+def _run_scan_task(run_id: str, task_id: str, prompt: str,
+                   deadline_ms: int) -> None:
     store.put_run(run_id, "running", task_id=task_id)
+    started = time.monotonic()
     try:
-        summary = agent.run_cycle(prompt or None)
+        # This is the paid path. On an on-request-only deployment the metered
+        # sources have been idle since the last request, so a run has to both
+        # allow the spend and clear the interval gates - otherwise the sweep is
+        # skipped and the caller is told "no social candidates", which reads
+        # exactly like a scan that ran and found nothing.
+        capped = store.spend_today() >= config.daily_spend_cap
+        if capped:
+            log.warning(
+                "daily spend cap $%.2f reached; run %s scans free sources only",
+                config.daily_spend_cap, run_id,
+            )
+        else:
+            agent.force_keyword_sweep()
+        summary = agent.run_cycle(prompt or None, include_metered=not capped)
+
+        # The scan is not interruptible mid-flight, so overrunning is reported
+        # rather than prevented. Saying so is the point: a caller that already
+        # timed out should not be told the run was delivered on time, and the
+        # work itself is not wasted - alerts have already gone to Slack.
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if elapsed_ms > deadline_ms:
+            log.warning("run %s took %dms, past its %dms deadline",
+                        run_id, elapsed_ms, deadline_ms)
+            note = (f"_(Completed in {elapsed_ms // 1000}s, past the "
+                    f"{deadline_ms // 1000}s deadline.)_")
+            summary = "\n\n".join([summary, note])
+
         response = {
             "run_id": run_id,
             "task_id": task_id,
@@ -261,6 +307,11 @@ def health() -> dict[str, Any]:
         "x_keyword_tier": config.x_keyword_tier,
         "apify_token_set": bool(config.apify_token),
         "linkedin_actor": config.source("linkedin").get("apify_actor"),
+        # True means the paid sources never run on the timer - they wait for a
+        # Pond run. A reviewer seeing linkedin with an old last_run_at should
+        # read this before concluding the source is broken.
+        "metered_on_request_only": config.metered_on_request_only,
+        "daily_spend_cap_usd": config.daily_spend_cap,
     }
 
 
@@ -282,7 +333,7 @@ def admin_scan(x_admin_token: str | None = Header(default=None)) -> dict[str, An
     # tier is skipped and the response says "no social candidates", which is
     # indistinguishable from a sweep that ran and found nothing.
     agent.force_keyword_sweep()
-    return {"summary": agent.run_cycle()}
+    return {"summary": agent.run_cycle(include_metered=True)}
 
 
 # ---------------------------------------------------------------------------

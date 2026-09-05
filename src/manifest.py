@@ -51,6 +51,27 @@ def build_manifest(config) -> dict[str, Any]:
                 "Sales and GTM teams who want to reach new-batch founders "
                 "before the rest of the market sees the announcement."
             ),
+            # Optional, and it only PREFILLS the publishing page - it cannot
+            # change a price that is already published. It is here so the
+            # manifest describes its own commercial terms rather than leaving
+            # them to be retyped by hand on every resubmission.
+            #
+            # usage_unit must match what /runs and /tasks report in
+            # `usage.unit_of_measurement`; the spec requires the reported unit
+            # to align with the saved pricing plan, and we report "result".
+            "pricing_plans": [
+                {
+                    "name": pond.get("plan_name", "Per result"),
+                    "pricing_model": "pay_as_you_go",
+                    # Minor units: 600 = $6.00.
+                    "amount_minor": int(pond.get("amount_minor", 600)),
+                    "usage_quantity": int(pond.get("usage_quantity", 2)),
+                    "usage_unit": "result",
+                    "description": pond.get(
+                        "plan_description", "$6 per 2 results"),
+                    "sort_order": 1,
+                }
+            ],
         },
         "actions": [
             {

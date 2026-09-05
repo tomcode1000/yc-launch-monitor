@@ -11,6 +11,17 @@ agent:
   # false positives appear; lower it once the client trusts the feed.
   confidence_threshold: 0.75
 
+# When true, the paid Apify sources do not run on the background timer at all:
+# they fire only when Pond invokes the agent (POST /runs) or an operator calls
+# /admin/scan. The free sources keep ticking either way, so the directory watch,
+# the Slack digest and /health stay live between requests.
+#
+# This is the right setting for a marketplace listing, where the agent is idle
+# most of the time and a six-hour timer would drain the Apify balance on nobody's
+# behalf. Set METERED_ON_REQUEST_ONLY in the environment to override without a
+# redeploy.
+metered_on_request_only: true
+
 # Poll intervals are per source, not global. The free sources can run at
 # minute-level freshness; the metered one cannot. See README "Cadence".
 sources:
@@ -56,7 +67,12 @@ sources:
     # actor from the same publisher takes identical parameters and returns
     # actual tweets, so this is a one-line swap.
     apify_actor: "watcher.data/search-x-by-keywords"
-    max_items_per_term: 50
+    # Sized against the Apify balance, not against appetite. At $0.01/item,
+    # 3 terms x 50 items is $1.50 a sweep - three requests would clear a $5
+    # month. 15 keeps a full run near $0.50, under DAILY_SPEND_CAP_USD, and
+    # the sweep is sorted latest-first, so the items dropped are the oldest
+    # ones the lookback window would mostly have discarded anyway.
+    max_items_per_term: 15
 
   linkedin:
     enabled: true

@@ -115,8 +115,15 @@ class MonitorScheduler:
 
         # Cost governor: metered sources go dormant once the cap trips.
         capped = self.store.spend_today() >= self.config.daily_spend_cap
-        runnable = [s for s in due if not (s.metered and capped)]
-        if capped and len(runnable) < len(due):
+        # On-request-only deployments never spend on the timer at all; the
+        # paid sources wait for a Pond run. Either way the free sources carry
+        # on, so /health and the directory watch stay live between requests.
+        on_request_only = self.config.metered_on_request_only
+        paid = not (capped or on_request_only)
+
+        runnable = [s for s in due
+                    if paid or not s.metered or s.has_free_tier]
+        if capped and not paid:
             log.warning(
                 "daily spend cap $%.2f reached; metered sources dormant",
                 self.config.daily_spend_cap,
@@ -125,8 +132,10 @@ class MonitorScheduler:
         if not runnable:
             return
 
-        log.info("cycle: %s", ", ".join(s.name for s in runnable))
-        summary = self.agent.run_cycle()
+        log.info("cycle (%s): %s",
+                 "paid" if paid else "free sources only",
+                 ", ".join(s.name for s in runnable))
+        summary = self.agent.run_cycle(include_metered=paid)
 
         for source in runnable:
             health = source.health()

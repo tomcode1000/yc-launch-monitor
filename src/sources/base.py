@@ -36,9 +36,17 @@ class Source(ABC):
 
     name: str = "base"
     metered: bool = False
+    # True when the source still produces signals with its paid calls turned
+    # off. X does (its timeline tiers are free); LinkedIn does not, so it is
+    # skipped outright on an unpaid pass rather than run to no purpose.
+    has_free_tier: bool = False
 
     def __init__(self, config: dict, interval_seconds: int | None = None):
         self.config = config or {}
+        # Flipped per pass by the caller: the background loop runs sources
+        # unpaid, a Pond request runs them paid. Default True so nothing that
+        # does not know about the flag changes behaviour.
+        self.paid_calls_allowed = True
         self.interval_seconds = int(
             interval_seconds or self.config.get("interval_seconds", 3600)
         )
@@ -80,6 +88,9 @@ class Source(ABC):
             self.last_item_count = 0
             self._health = SourceHealth(self.name, False, str(exc)[:200], self._last_run)
             return []
+
+    def allow_paid_calls(self, allowed: bool) -> None:
+        self.paid_calls_allowed = bool(allowed)
 
     def health(self) -> SourceHealth:
         return self._health

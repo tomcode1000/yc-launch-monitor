@@ -55,6 +55,9 @@ class RateLimited(Exception):
 
 class XSource(Source):
     name = "x"
+    # Tiers 1 and 2 are free timeline polling, so X is still worth running
+    # when paid calls are switched off - only tier 3 goes quiet.
+    has_free_tier = True
 
     def __init__(self, config: dict, apify_token: str | None = None,
                  keyword_tier: str = "off", **kw):
@@ -66,6 +69,10 @@ class XSource(Source):
         self._last_keyword_run = 0.0
         self._cursor = 0
         self._cooldown_until = 0.0
+        # Only tier 3 costs money, so the governor must be charged for tier 3
+        # items alone. Billing every tweet would price the free timeline tiers
+        # as if they were paid and trip the daily cap on nothing.
+        self.last_paid_item_count = 0
 
     @property
     def metered(self) -> bool:  # type: ignore[override]
@@ -79,6 +86,7 @@ class XSource(Source):
                 self._discovered.add(h)
 
     def fetch(self, since: datetime) -> list[RawSignal]:
+        self.last_paid_item_count = 0
         signals = self._fetch_timelines(since)
         if self._keyword_due():
             try:
@@ -172,6 +180,9 @@ class XSource(Source):
     def _keyword_due(self) -> bool:
         if self.keyword_tier != "apify" or not self.apify_token:
             return False
+        # An unpaid pass keeps tiers 1-2 and stops here.
+        if not self.paid_calls_allowed:
+            return False
         interval = int(self.config.get("keyword_interval_seconds", 1800))
         return (time.time() - self._last_keyword_run) >= interval
 
@@ -198,6 +209,8 @@ class XSource(Source):
         items = [i for i in items
                  if isinstance(i, dict) and not i.get("noResults")]
         log.info("keyword sweep: %d terms -> %d tweets", len(terms), len(items))
+        # Apify bills on what the actor returned, not on what survives filtering.
+        self.last_paid_item_count = len(items)
 
         out: list[RawSignal] = []
         for item in items:
@@ -229,7 +242,11 @@ class XSource(Source):
     def estimated_cost(self, item_count: int) -> float:
         # apidojo/tweet-scraper bills per dataset item; treat as a rough cent
         # per item so the governor errs toward stopping early.
-        return 0.0 if self.keyword_tier != "apify" else item_count * 0.01
+        # item_count is every signal the pass produced, most of them free.
+        # Charge for the tier-3 items only.
+        if self.keyword_tier != "apify":
+            return 0.0
+        return self.last_paid_item_count * 0.01
 
 
 def _parse_time(value) -> datetime | None:

@@ -88,6 +88,25 @@ class Config:
     def daily_spend_cap(self) -> float:
         return float(os.environ.get("DAILY_SPEND_CAP_USD", "2.00"))
 
+    @property
+    def metered_on_request_only(self) -> bool:
+        """Do the paid sources run on the background timer, or only on demand?
+
+        A marketplace agent sits idle most of the time. With this on, the
+        background loop keeps the free sources warm - so /health, the digest
+        and the directory watch stay live - while the metered Apify sources
+        fire only when Pond actually invokes the agent through POST /runs
+        (or an operator calls /admin/scan). The credit is then spent on real
+        requests rather than on a six-hour timer nobody asked for.
+
+        Environment wins over config.yml so a deployment can flip it without
+        a redeploy of the image.
+        """
+        env = os.environ.get("METERED_ON_REQUEST_ONLY")
+        if env is not None:
+            return env.strip().lower() in ("1", "true", "yes", "on")
+        return bool(self.get("metered_on_request_only", False))
+
 
 def load_config(path: Path | None = None) -> Config:
     path = path or CONFIG_PATH
