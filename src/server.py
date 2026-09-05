@@ -69,8 +69,17 @@ def _start() -> None:
 # Pond Protocol
 # ---------------------------------------------------------------------------
 
-def fail(status_code: int, code: str, message: str):
-    raise HTTPException(status_code=status_code, detail={"code": code, "message": message})
+def fail(status_code: int, code: str, message: str, run_id: str | None = None):
+    """Raise a Pond-shaped error.
+
+    The spec's error body carries `run_id` alongside `error`, so a caller can
+    tie a failure to the run it sent. Passed explicitly because the handler
+    that renders this has no access to the request body.
+    """
+    detail = {"code": code, "message": message}
+    if run_id:
+        detail["_run_id"] = run_id
+    raise HTTPException(status_code=status_code, detail=detail)
 
 
 def authenticate_pond(
@@ -95,6 +104,19 @@ def _valid_version(value: str) -> bool:
     return len(parts) == 2 and all(p.isdigit() for p in parts)
 
 
+def _fingerprint(run: "RunRequest") -> str:
+    """Stable hash of the parts of a request that change what it does."""
+    import hashlib
+    import json
+
+    payload = json.dumps(
+        {"action_id": run.action_id, "parameters": run.parameters,
+         "messages": run.messages},
+        sort_keys=True, default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 class RunRequest(BaseModel):
     run_id: str
     agent_id: str | None = None
@@ -105,6 +127,29 @@ class RunRequest(BaseModel):
     messages: list[dict] = []
     parameters: dict = {}
     execution: dict = {}
+
+
+@app.middleware("http")
+async def enforce_request_limit(request: Request, call_next):
+    """Honour the max_request_bytes the manifest advertises.
+
+    A limit that is published but not enforced is not a limit: a 2 MB body was
+    accepted against a declared 1 MB ceiling. Checked from Content-Length so an
+    oversized body is refused before it is read into memory.
+    """
+    if request.url.path in ("/runs",):
+        declared = build_manifest(config)["limits"]["max_request_bytes"]
+        length = request.headers.get("content-length")
+        if length and length.isdigit() and int(length) > declared:
+            return JSONResponse(
+                status_code=400,
+                content={"error": {
+                    "code": "invalid_request",
+                    "message": (f"The request body exceeds max_request_bytes "
+                                f"({declared})."),
+                }},
+            )
+    return await call_next(request)
 
 
 @app.get("/manifest")
@@ -118,18 +163,54 @@ def create_run(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if idempotency_key != run.run_id:
-        fail(400, "invalid_request", "Idempotency-Key must match run_id.")
+        fail(400, "invalid_request", "Idempotency-Key must match run_id.",
+             run.run_id)
 
-    # Pond requires persisted idempotency: a retried run_id returns the original
-    # response instead of running the scan again.
+    # A retry must return the original answer; a DIFFERENT request wearing the
+    # same key is a client bug, and returning the first run's result would hide
+    # it. The spec calls for 409 idempotency_conflict, so the request is
+    # fingerprinted and compared.
+    fingerprint = _fingerprint(run)
     existing = store.get_run(run.run_id)
-    if existing and existing.get("response"):
-        import json
+    if existing:
+        seen = existing.get("request_hash")
+        if seen and seen != fingerprint:
+            fail(409, "idempotency_conflict",
+                 "This Idempotency-Key was already used for a different request.",
+                 run.run_id)
+        if existing.get("response"):
+            import json
 
-        return json.loads(existing["response"])
+            return json.loads(existing["response"])
+        # Accepted as a task and still running: hand back the same task_id
+        # rather than starting a second copy of the same work.
+        if existing.get("task_id"):
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "run_id": run.run_id,
+                    "task_id": existing["task_id"],
+                    "status": existing.get("status") or "queued",
+                    "poll_after_ms": 3000,
+                },
+            )
 
     if run.action_id not in (None, "scan_now", "query_state"):
-        fail(400, "unsupported_operation", "The action is not supported.")
+        fail(400, "unsupported_operation", "The action is not supported.",
+             run.run_id)
+
+    # The caller states which media types it will accept. Returning markdown to
+    # a caller that asked only for PNG is a silent contract break, so it is
+    # refused rather than answered in a format nobody asked for.
+    accepted = (run.execution or {}).get("accepted_output_modes")
+    if accepted:
+        if not isinstance(accepted, list):
+            fail(400, "invalid_request",
+                 "accepted_output_modes must be a list.", run.run_id)
+        ours = build_manifest(config)["output_modes"]
+        if not set(accepted) & set(ours):
+            fail(415, "unsupported_content_type",
+                 f"This agent returns {', '.join(ours)}.", run.run_id)
 
     prompt = (run.parameters or {}).get("prompt") or ""
 
@@ -140,11 +221,16 @@ def create_run(
     default_results = int(
         (config.get("pond", {}) or {}).get("usage_quantity", 2))
     max_results = (run.parameters or {}).get("max_results", default_results)
+    # A well-formed request carrying a value the schema rejects is
+    # invalid_input (422), not invalid_request (400) - the latter is for a
+    # malformed request or a protocol failure.
     if not isinstance(max_results, int) or isinstance(max_results, bool):
-        fail(400, "invalid_request", "max_results must be an integer.")
+        fail(422, "invalid_input", "max_results must be an integer.",
+             run.run_id)
     if not 1 <= max_results <= MAX_RESULTS_CEILING:
-        fail(400, "invalid_request",
-             f"max_results must be between 1 and {MAX_RESULTS_CEILING}.")
+        fail(422, "invalid_input",
+             f"max_results must be between 1 and {MAX_RESULTS_CEILING}.",
+             run.run_id)
 
     # execution.deadline_ms is the caller's ceiling, measured from acceptance.
     # The protocol does not oblige us to enforce it - Pond just stops polling
@@ -171,11 +257,13 @@ def create_run(
             "output": [{"type": "text", "text": text}],
             "usage": {"unit_of_measurement": "result", "quantity": 1},
         }
-        store.put_run(run.run_id, "completed", response)
+        store.put_run(run.run_id, "completed", response,
+                      request_hash=fingerprint)
         return response
 
     task_id = f"task_{uuid.uuid4().hex[:16]}"
-    store.put_run(run.run_id, "queued", task_id=task_id)
+    store.put_run(run.run_id, "queued", task_id=task_id,
+                  request_hash=fingerprint)
     threading.Thread(
         target=_run_scan_task,
         args=(run.run_id, task_id, prompt, deadline_ms or max_run_ms,
@@ -197,7 +285,7 @@ def create_run(
 def get_task(task_id: str):
     record = store.get_task(task_id)
     if not record:
-        fail(404, "not_found", "Unknown task.")
+        fail(404, "task_not_found", "Unknown task.")
     if record["status"] in ("completed", "failed") and record.get("response"):
         import json
 
@@ -409,7 +497,12 @@ async def pond_error(_request: Request, error: HTTPException):
     detail = error.detail
     if not isinstance(detail, dict):
         detail = {"code": "invalid_request", "message": str(detail)}
-    return JSONResponse(status_code=error.status_code, content={"error": detail})
+    detail = dict(detail)
+    run_id = detail.pop("_run_id", None)
+    body: dict[str, Any] = {"error": detail}
+    if run_id:
+        body = {"run_id": run_id, "error": detail}
+    return JSONResponse(status_code=error.status_code, content=body)
 
 
 @app.exception_handler(RequestValidationError)

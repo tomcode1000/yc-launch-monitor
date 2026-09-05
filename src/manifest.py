@@ -26,7 +26,10 @@ def build_manifest(config) -> dict[str, Any]:
     return {
         "protocol": "marketplace-agent",
         "protocol_version": PROTOCOL_VERSION,
-        "agent_version": "1.0.0",
+        # Bumped when the action set, input contract, capabilities, media modes
+        # or limits change - the spec requires it, and scan_now gained a
+        # max_results parameter.
+        "agent_version": "1.1.0",
         "metadata": {
             "name": "YC Launch Monitor",
             "short_description": (

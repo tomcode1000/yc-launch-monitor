@@ -90,6 +90,12 @@ class Store:
         self._conn.executescript(SCHEMA)
         # Databases created before founder-first leads existed predate these
         # columns. Add them rather than making the client wipe state.
+        for table, column in (("pond_runs", "request_hash TEXT"),):
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
         for column in ("founder TEXT", "post_url TEXT"):
             try:
                 self._conn.execute(f"ALTER TABLE companies ADD COLUMN {column}")
@@ -282,17 +288,21 @@ class Store:
         ).fetchone()
         return dict(row) if row else None
 
-    def put_run(self, run_id, status, response=None, task_id=None) -> None:
+    def put_run(self, run_id, status, response=None, task_id=None,
+                request_hash=None) -> None:
         with self._lock:
             now = _now()
             self._conn.execute(
                 """INSERT INTO pond_runs
-                     (run_id, task_id, status, response, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?)
+                     (run_id, task_id, status, response, created_at, updated_at,
+                      request_hash)
+                   VALUES (?,?,?,?,?,?,?)
                    ON CONFLICT(run_id) DO UPDATE SET
                      status=excluded.status,
                      response=COALESCE(excluded.response, pond_runs.response),
                      task_id=COALESCE(excluded.task_id, pond_runs.task_id),
+                     request_hash=COALESCE(pond_runs.request_hash,
+                                           excluded.request_hash),
                      updated_at=excluded.updated_at""",
                 (
                     run_id,
@@ -301,6 +311,7 @@ class Store:
                     json.dumps(response) if response is not None else None,
                     now,
                     now,
+                    request_hash,
                 ),
             )
             self._conn.commit()
